@@ -11,6 +11,19 @@ import type { Submissions } from "./sec/filings";
 import { buildCompanyRecord, type CompanyRecord } from "./sec/record";
 import type { CompanyFacts } from "./sec/xbrl";
 import type { DamodaranData } from "./damodaran";
+import type { EuRecord } from "./esef/record";
+
+/** A European issuer in the ESEF index. */
+export interface EuRow {
+  lei: string;
+  name: string;
+  country: string;
+  currency: string | null;
+  fiscal_year_end: string | null;
+}
+
+/** LEI (ISO 17442): 18 alphanumerics + 2 check digits. */
+export const LEI_RE = /^[A-Z0-9]{18}[0-9]{2}$/;
 
 /** One row of the company index. */
 export interface CompanyRow {
@@ -50,11 +63,14 @@ const TTL_SUBMISSIONS = 6 * 3600;
 let indexMemo: { key: AssetsLike | null; rows: Promise<CompanyRow[]> } | null = null;
 let manifestMemo: { key: AssetsLike | null; value: Promise<Manifest | null> } | null = null;
 let damodaranMemo: { key: AssetsLike | null; value: Promise<DamodaranData | null> } | null = null;
+/** Other per-isolate asset memos, keyed by path. A failure is never memoized. */
+const assetMemos = new Map<string, { key: AssetsLike | null; value: Promise<unknown> }>();
 
 export function resetMemos(): void {
   indexMemo = null;
   manifestMemo = null;
   damodaranMemo = null;
+  assetMemos.clear();
 }
 
 export class Repo {
@@ -94,6 +110,39 @@ export class Repo {
       });
     }
     return damodaranMemo.value;
+  }
+
+  private memoAsset<T>(path: string): Promise<T | null> {
+    const m = assetMemos.get(path);
+    if (m && m.key === this.assets) return m.value as Promise<T | null>;
+    const value = this.asset<T>(path);
+    assetMemos.set(path, { key: this.assets, value });
+    value.catch(() => assetMemos.delete(path));
+    return value;
+  }
+
+  /** European issuers built from ESEF reports (empty when the EU snapshot isn't deployed). */
+  async euCompanies(): Promise<EuRow[]> {
+    const file = await this.memoAsset<CompanyIndexFile>("/eu/companies.json");
+    if (!file) return [];
+    const f = file.fields;
+    return file.data.map((r) => {
+      const get = (k: string) => (r[f.indexOf(k)] as string | null) ?? null;
+      return { lei: String(get("lei")), name: String(get("name")), country: String(get("country")), currency: get("currency"), fiscal_year_end: get("fiscal_year_end") };
+    });
+  }
+
+  /** A European issuer's record by LEI; a ToolError explains coverage when it isn't built. */
+  async euRecord(lei: string): Promise<EuRecord> {
+    const rec = await this.asset<EuRecord>(`/eu/co/${lei}.json`);
+    if (!rec) {
+      throw new ToolError(
+        `LEI ${lei} is not in the European coverage yet. Covered issuers are listed by company_lookup ` +
+          "(region EU); ESEF reports exist for most EU-listed companies, and coverage is being extended.",
+      );
+    }
+    if (!rec.built_at) rec.built_at = (await this.memoAsset<{ built_at: string }>("/eu/manifest.json"))?.built_at ?? "";
+    return rec;
   }
 
   /** Every SEC registrant with a ticker (snapshot index, else SEC's live ticker list). */

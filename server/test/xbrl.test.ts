@@ -243,6 +243,9 @@ describe("rules on synthetic facts", () => {
     [{ borrowings: 30, borrowings_noncurrent: 20, borrowings_current: 10 }, 30, "borrowings"],
     [{ borrowings_noncurrent: 20, borrowings_current: 10 }, 30, "borrowings_noncurrent + borrowings_current"],
     [{ borrowings_current: 10 }, 10, "borrowings_current (no non-current borrowings concept reported: likely incomplete)"],
+    // Current debt tagged as its two components (no total): summed, never added on top of a total.
+    [{ borrowings_noncurrent: 20, short_term_borrowings: 3, current_portion_of_longterm_borrowings: 4 }, 27, "borrowings_noncurrent + (short_term_borrowings + current_portion_of_longterm_borrowings)"],
+    [{ borrowings_noncurrent: 20, borrowings_current: 7, short_term_borrowings: 3 }, 27, "borrowings_noncurrent + borrowings_current"],
     [{}, null, "no debt concepts reported"],
   ])("IFRS debt never double counts %#", (inst, value, formula) => {
     const cells = Object.fromEntries(Object.entries(inst).map(([k, v]) => [k, { value: v }]));

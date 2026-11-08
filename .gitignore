@@ -1,9 +1,11 @@
-node_modules/
-.wrangler/
-.dev.vars
-.env
 *.log
 .DS_Store
-server/snapshot/v1/
-server/.snapshot-work/
+.dev.vars
+.env
+.wrangler/
+node_modules/
 server/.damodaran-last/
+server/.esef-cache/
+server/.esef-last/
+server/.snapshot-work/
+server/snapshot/v1/

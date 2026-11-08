@@ -4,7 +4,7 @@
 
 A free, hosted, open-source data connector that lets Claude work like a junior analyst with official sources only: no paid terminal, no API key. Every number comes back with the filing it came from.
 
-> Status: beta. US SEC financials, computed ratios, risk-free rates (US + euro area), ECB exchange rates and Damodaran valuation inputs work today. Europe (ESEF/IFRS) is next.
+> Status: beta. US SEC financials, **European issuers from their ESEF reports (IFRS)**, computed ratios, risk-free rates (US + euro area), ECB exchange rates and Damodaran valuation inputs work today.
 
 ## Built on the shoulders of open-finance-mcp
 
@@ -23,8 +23,8 @@ See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 | Tool | What it returns |
 |---|---|
-| `company_lookup` | Name, ticker or CIK → canonical record: ticker, CIK, exchange, reporting standard, currency, fiscal year end |
-| `financial_statements` | Standardized income statement, cash flow and balance sheet: annual years plus LTM, with computed EBITDA, FCF, total and net debt. Every value carries its XBRL concept and accession, and a `sources` list gives each filing's URL |
+| `company_lookup` | Name, ticker, CIK or LEI → canonical record: ticker or LEI, region (US/EU), reporting standard, currency, fiscal year end |
+| `financial_statements` | Standardized income statement, cash flow and balance sheet from SEC XBRL (US) or ESEF annual reports (EU, by LEI): annual years plus LTM (SEC), with computed EBITDA, FCF, total and net debt. Every value carries its concept and filing, and a `sources` list gives each filing's URL |
 | `key_metrics` | Growth, CAGR, margins, FCF conversion, ROE, ROA, ROIC, net debt / EBITDA, interest coverage. Each value is computed and shows its formula |
 | `risk_free_rate` | Tenor-matched government yield for a WACC: US Treasury par yield curve, ECB euro area par yields (AAA or all issuers), latest or on a date |
 | `fx_rate` | ECB reference rates for 30+ currencies: latest, on a date (balance sheet) or a period average (income statement) |
@@ -39,12 +39,13 @@ See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Data sources
 
-SEC EDGAR (public domain), U.S. Treasury, the ECB Data Portal (Source: ECB statistics), and Aswath Damodaran's public datasets (NYU Stern), with attribution. Terms, limits and attribution for every source are in [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md).
+SEC EDGAR (public domain), ESEF annual reports via [filings.xbrl.org](https://filings.xbrl.org) (XBRL International), U.S. Treasury, the ECB Data Portal (Source: ECB statistics), and Aswath Damodaran's public datasets (NYU Stern), with attribution. Terms, limits and attribution for every source are in [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md).
 
 ## Limitations
 
 - No share prices. Market cap = SEC shares outstanding × a price you give.
 - No consensus estimates.
+- Europe: about 30 large issuers so far (France, Netherlands, Spain, Finland, Italy, Belgium), annual figures only. No German issuers: their reports aren't in the public ESEF repository. Lines an issuer tags only with its own concepts come back `null`.
 - IFRS 20-F filers have no LTM, because SEC has no XBRL for 6-K interims.
 - Banks and insurers are flagged; EBITDA and EV metrics don't apply to them.
 

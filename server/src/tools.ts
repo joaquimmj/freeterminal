@@ -9,9 +9,19 @@ import { ConfigError, ToolError, UpstreamError } from "./errors";
 import { countryPremium, DAMODARAN_PAGE, industryInputs, industryNames } from "./damodaran";
 import type { Fx } from "./fx";
 import { keyMetrics } from "./metrics";
-import { companyBlock, financialStatements, recordWarnings, reportingStandard, slice, sourcesFor } from "./present";
+import {
+  companyBlock,
+  euCompanyBlock,
+  euFinancialStatements,
+  euSourcesFor,
+  financialStatements,
+  recordWarnings,
+  reportingStandard,
+  slice,
+  sourcesFor,
+} from "./present";
 import type { Rates } from "./rates";
-import type { Repo } from "./repo";
+import { LEI_RE, type CompanyRow, type EuRow, type Repo } from "./repo";
 import { isFinancial } from "./sec/filings";
 
 export interface Deps {
@@ -22,9 +32,10 @@ export interface Deps {
 
 export const INSTRUCTIONS = `\
 ${PRODUCT_NAME}: free financial data with citations, from official sources.
-Today: US companies from SEC EDGAR XBRL filings (10-K, 10-Q, 20-F), computed ratios, risk-free rates \
-(US Treasury, ECB euro area), ECB exchange rates, and Damodaran's valuation inputs (ERP by country, \
-industry betas and costs of capital). Europe (ESEF/IFRS) is coming.
+Today: US companies from SEC EDGAR XBRL filings (10-K, 10-Q, 20-F), large European issuers from their \
+ESEF annual reports (IFRS; pass the LEI from company_lookup), computed ratios, risk-free rates (US \
+Treasury, ECB euro area), ECB exchange rates, and Damodaran's valuation inputs (ERP by country, industry \
+betas and costs of capital).
 - Start with company_lookup to resolve a name to a ticker/CIK, then call financial_statements or key_metrics.
 - For a DCF or WACC, take the risk-free rate from risk_free_rate with a tenor matching the forecast \
 horizon (usually 10Y), in the currency of the cash flows; the equity risk premium and an industry \
@@ -81,12 +92,12 @@ function registerTools({ repo, rates, fx }: Deps, guarded: (run: () => Promise<T
     {
       title: "Find a company",
       description:
-        "Find a company by ticker, name or SEC CIK. Returns the canonical record: name, ticker, CIK, " +
-        "exchange, region, reporting standard (US-GAAP or IFRS), currency and fiscal year end. " +
-        "Covers SEC registrants (US-listed companies, including foreign filers on 20-F). " +
-        "Example: query 'apple' or 'AAPL' or 'CIK0000320193'.",
+        "Find a company by ticker, name, SEC CIK or LEI. Returns the canonical record: name, ticker or LEI, " +
+        "region (US or EU), reporting standard (US-GAAP or IFRS), currency and fiscal year end. Covers SEC " +
+        "registrants (US-listed companies, including foreign filers on 20-F) and large European issuers from their " +
+        "ESEF annual reports. Example: query 'apple', 'AAPL', 'LVMH' or 'CIK0000320193'.",
       inputSchema: z.object({
-        query: z.string().min(1).max(200).describe("Ticker, company name or CIK, e.g. 'MSFT', 'caterpillar', 'CIK0000034088'"),
+        query: z.string().min(1).max(200).describe("Ticker, company name, CIK or LEI, e.g. 'MSFT', 'caterpillar', 'TotalEnergies'"),
         limit: z.number().int().min(1).max(25).optional().describe("Max results (default 10)"),
       }),
       annotations: READ_ONLY,
@@ -96,13 +107,13 @@ function registerTools({ repo, rates, fx }: Deps, guarded: (run: () => Promise<T
         const q = query.trim().toUpperCase();
         if (!q) throw new ToolError("query is empty");
         const n = limit ?? 10;
-        const rows = await repo.companies();
+        const [rows, eu] = await Promise.all([repo.companies(), repo.euCompanies()]);
         const cikMatch = /^(?:CIK)?0*(\d{1,10})$/.exec(q);
         const byCik = cikMatch ? rows.filter((c) => c.cik === Number(cikMatch[1])) : [];
         const exact = rows.filter((c) => (c.ticker ?? "").toUpperCase() === q.replaceAll(".", "-"));
         const seen = new Set([...byCik, ...exact]);
         const byName = rows.filter((c) => !seen.has(c) && c.name.toUpperCase().includes(q));
-        const results: Array<Record<string, unknown>> = [...byCik, ...exact, ...byName].slice(0, n).map((c) => ({
+        const us = (c: CompanyRow) => ({
           name: c.name,
           ticker: c.ticker,
           cik: c.cik,
@@ -112,8 +123,25 @@ function registerTools({ repo, rates, fx }: Deps, guarded: (run: () => Promise<T
           currency: c.currency,
           fiscal_year_end: c.fiscal_year_end,
           source: "SEC company tickers list",
-        }));
-        if (results.length < n && !cikMatch) {
+        });
+        const euOut = (c: EuRow) => ({
+          name: c.name,
+          ticker: null,
+          lei: c.lei,
+          country: c.country,
+          region: "EU",
+          reporting_standard: "IFRS",
+          currency: c.currency,
+          fiscal_year_end: c.fiscal_year_end,
+          source: "ESEF annual reports (filings.xbrl.org)",
+        });
+        const euHits = LEI_RE.test(q) ? eu.filter((c) => c.lei === q) : eu.filter((c) => c.name.toUpperCase().includes(q));
+        const results: Array<Record<string, unknown>> = [
+          ...[...byCik, ...exact].map(us),
+          ...euHits.map(euOut),
+          ...byName.map(us),
+        ].slice(0, n);
+        if (results.length < n && !cikMatch && !LEI_RE.test(q)) {
           // EDGAR's company index also has registrants with no current ticker
           // (a predecessor company, a financing subsidiary). Best effort.
           const have = new Set(results.map((r) => r.cik));
@@ -136,31 +164,61 @@ function registerTools({ repo, rates, fx }: Deps, guarded: (run: () => Promise<T
         }
         if (!results.length) {
           throw new ToolError(
-            `No SEC registrant matches ${JSON.stringify(query)}. Try a shorter name or the ticker. ` +
-              "European issuers without a US listing are not covered yet.",
+            `No company matches ${JSON.stringify(query)}. Try a shorter name, the ticker, or the LEI. European ` +
+              `coverage is ${eu.length} large issuers so far (no German issuers: their reports are not in the public ESEF repository).`,
           );
         }
         return ok({
           results,
-          note: "Pass `ticker` (or `CIK##########` when ticker is null) to financial_statements.",
+          note:
+            "Pass `ticker` (or `CIK##########` when ticker is null) to financial_statements; for EU issuers pass " +
+            "the `lei` as `ticker`. A company listed in both regions (e.g. a 20-F filer) can differ: US filings may " +
+            "use US GAAP or a different presentation than its EU IFRS report.",
         });
       }),
   );
 
+  /** Resolve a ticker/CIK (SEC) or an LEI (EU) to the record the statement tools use. */
+  async function resolveRecord(ticker: string) {
+    const t = ticker.trim().toUpperCase();
+    if (LEI_RE.test(t)) {
+      const rec = await repo.euRecord(t);
+      if (!rec.financials) {
+        throw new ToolError(`${rec.name} (LEI ${rec.lei}) has ${rec.financials_error}; do not substitute figures from memory.`);
+      }
+      return { kind: "eu" as const, rec };
+    }
+    const co = await repo.resolve(ticker);
+    const rec = await repo.record(co.cik);
+    if (!rec.financials) {
+      throw new ToolError(
+        `${rec.name ?? co.name ?? `CIK ${co.cik}`} (CIK ${co.cik}) has no usable annual XBRL financials: ` +
+          `${rec.financials_error}. If you know a predecessor registrant's CIK, call again with it as ` +
+          "the ticker (e.g. 'CIK0000034088'); otherwise do not substitute figures from memory.",
+      );
+    }
+    return { kind: "sec" as const, rec };
+  }
+
   server.registerTool(
     "financial_statements",
     {
-      title: "Financial statements (SEC XBRL)",
+      title: "Financial statements (SEC XBRL, EU ESEF)",
       description:
-        "Standardized income statement, cash flow and balance sheet from SEC EDGAR XBRL filings " +
-        "(10-K / 10-Q, or 20-F for IFRS foreign filers): annual fiscal years plus an LTM (last twelve months) " +
-        "column built as FY + YTD - prior YTD. Includes revenue, gross profit, operating income (EBIT), " +
+        "Standardized income statement, cash flow and balance sheet from official filings: SEC EDGAR XBRL " +
+        "(10-K / 10-Q, or 20-F for IFRS foreign filers) for US-listed companies, and ESEF annual reports (IFRS) " +
+        "for European issuers (pass their LEI). Annual fiscal years plus, for SEC filers, an LTM (last twelve " +
+        "months) column built as FY + YTD - prior YTD. Includes revenue, gross profit, operating income (EBIT), " +
         "pretax and net income, interest expense, D&A, operating cash flow, capex, diluted shares and EPS, " +
         "cash, short-term investments, total assets, equity and debt components, plus computed EBITDA, " +
-        "free cash flow, total debt and net debt with formulas. Also returns shares outstanding from the cover page. " +
-        "Every value cites its XBRL concept and filing accession; `sources` lists each filing with its URL.",
+        "free cash flow, total debt and net debt with formulas. SEC filers also get cover-page shares outstanding. " +
+        "Every value cites its concept and filing; `sources` lists each filing with its URL.",
       inputSchema: z.object({
-        ticker: z.string().min(1).max(20).describe("Ticker (e.g. 'AAPL', 'BRK.B') or CIK (e.g. 'CIK0000034088')"),
+        ticker: z
+          .string()
+          .min(1)
+          .max(24)
+          .describe("Ticker (e.g. 'AAPL', 'BRK.B'), CIK (e.g. 'CIK0000034088'), or LEI for EU issuers (from company_lookup)"),
         years: z
           .number()
           .int()
@@ -168,23 +226,16 @@ function registerTools({ repo, rates, fx }: Deps, guarded: (run: () => Promise<T
           .max(SNAPSHOT_YEARS)
           .optional()
           .describe(`Number of fiscal years, newest last (default 5, max ${SNAPSHOT_YEARS})`),
-        include_ltm: z.boolean().optional().describe("Add the LTM column when a 10-Q follows the last 10-K (default true)"),
+        include_ltm: z.boolean().optional().describe("Add the LTM column when an interim report follows the last annual one (default true)"),
       }),
       annotations: READ_ONLY,
     },
     async ({ ticker, years, include_ltm }) =>
       guarded(async () => {
-        const co = await repo.resolve(ticker);
-        const rec = await repo.record(co.cik);
-        if (!rec.financials) {
-          throw new ToolError(
-            `${rec.name ?? co.name ?? `CIK ${co.cik}`} (CIK ${co.cik}) has no usable annual XBRL financials: ` +
-              `${rec.financials_error}. If you know a predecessor registrant's CIK, call again with it as ` +
-              "the ticker (e.g. 'CIK0000034088'); otherwise do not substitute figures from memory.",
-          );
-        }
-        const out = financialStatements(rec, years ?? 5, include_ltm ?? true);
-        return ok({ ...out, shares_outstanding: rec.shares_outstanding });
+        const r = await resolveRecord(ticker);
+        if (r.kind === "eu") return ok(euFinancialStatements(r.rec, years ?? 5, include_ltm ?? true));
+        const out = financialStatements(r.rec, years ?? 5, include_ltm ?? true);
+        return ok({ ...out, shares_outstanding: r.rec.shares_outstanding });
       }),
   );
 
@@ -193,40 +244,36 @@ function registerTools({ repo, rates, fx }: Deps, guarded: (run: () => Promise<T
     {
       title: "Key metrics (computed)",
       description:
-        "Ratios computed from SEC XBRL financial statements, each with its formula: revenue and net income growth, " +
-        "revenue CAGR, gross / operating / EBITDA / net / FCF margins, capex to revenue, FCF conversion, ROE, ROA, " +
-        "ROIC, net debt to EBITDA, interest coverage. Annual fiscal years plus LTM. Ratios are decimals " +
-        "(0.25 = 25%). Null when an input is not reported. Banks and insurers get no EBITDA-based ratios or ROIC.",
+        "Ratios computed from the standardized financial statements (SEC XBRL or EU ESEF), each with its formula: " +
+        "revenue and net income growth, revenue CAGR, gross / operating / EBITDA / net / FCF margins, capex to " +
+        "revenue, FCF conversion, ROE, ROA, ROIC, net debt to EBITDA, interest coverage. Annual fiscal years plus " +
+        "LTM where available. Ratios are decimals (0.25 = 25%). Null when an input is not reported. Banks and " +
+        "insurers get no EBITDA-based ratios or ROIC.",
       inputSchema: z.object({
-        ticker: z.string().min(1).max(20).describe("Ticker (e.g. 'AAPL') or CIK (e.g. 'CIK0000320193')"),
+        ticker: z.string().min(1).max(24).describe("Ticker (e.g. 'AAPL'), CIK, or LEI for EU issuers"),
         years: z.number().int().min(1).max(SNAPSHOT_YEARS - 1).optional().describe("Number of fiscal years (default 5)"),
-        include_ltm: z.boolean().optional().describe("Add LTM ratios when a 10-Q follows the last 10-K (default true)"),
+        include_ltm: z.boolean().optional().describe("Add LTM ratios when available (default true)"),
       }),
       annotations: READ_ONLY,
     },
     async ({ ticker, years, include_ltm }) =>
       guarded(async () => {
-        const co = await repo.resolve(ticker);
-        const rec = await repo.record(co.cik);
-        if (!rec.financials) {
-          throw new ToolError(
-            `${rec.name ?? co.name ?? `CIK ${co.cik}`} has no usable annual XBRL financials (${rec.financials_error}), ` +
-              "so no ratios can be computed. Do not estimate them from memory.",
-          );
-        }
+        const r = await resolveRecord(ticker);
+        const std = r.rec.financials!;
         const n = years ?? 5;
         const ltm = include_ltm ?? true;
-        const financial = isFinancial(rec.sic);
-        const { periods, revenue_cagr } = keyMetrics(rec.financials, n, ltm, financial);
-        const { cited } = slice(rec.financials, n + 1, ltm);
-        const company = companyBlock(rec);
-        const warnings = recordWarnings(rec, cited);
+        const financial = r.kind === "eu" ? r.rec.financial : isFinancial(r.rec.sic);
+        const { periods, revenue_cagr } = keyMetrics(std, n, ltm, financial);
+        const { cited } = slice(std, n + 1, ltm);
+        const company = r.kind === "eu" ? euCompanyBlock(r.rec) : companyBlock(r.rec);
+        const warnings = r.kind === "eu" ? [] : recordWarnings(r.rec, cited);
         if (financial) {
           warnings.push("financial_company: EBITDA-based ratios and ROIC are not meaningful for banks and insurers (null).");
         }
+        const id = r.kind === "eu" ? `LEI ${r.rec.lei}` : (company.ticker ?? `CIK ${r.rec.cik}`);
         return ok({
           summary:
-            `${company.name} (${company.ticker ?? `CIK ${rec.cik}`}): ${periods.length} period(s) of ratios computed by ` +
+            `${company.name} (${id}): ${periods.length} period(s) of ratios computed by ` +
             `${PRODUCT_NAME} from reported figures. Each shows its formula; inputs are in financial_statements.`,
           company,
           units: "Ratios are decimals (0.25 = 25%). net_debt_to_ebitda and interest_coverage are multiples (x).",
@@ -234,8 +281,8 @@ function registerTools({ repo, rates, fx }: Deps, guarded: (run: () => Promise<T
           revenue_cagr,
           periods,
           warnings,
-          sources: sourcesFor(rec, cited),
-          data_as_of: rec.built_at,
+          sources: r.kind === "eu" ? euSourcesFor(r.rec, cited) : sourcesFor(r.rec, cited),
+          data_as_of: r.rec.built_at,
           disclaimer: DISCLAIMER,
         });
       }),
@@ -380,7 +427,9 @@ function registerTools({ repo, rates, fx }: Deps, guarded: (run: () => Promise<T
           version: VERSION,
           coverage: {
             us_sec: "SEC registrants with XBRL financials (10-K/10-Q; 20-F IFRS filers without LTM).",
-            europe_esef: "planned",
+            europe_esef:
+              "Large EU issuers (FR, NL, ES, FI, IT, BE) from their ESEF annual reports via filings.xbrl.org; annual only " +
+              "(half-year reports are rarely in ESEF). No German issuers yet: their reports are not in the public repository.",
             ratios: "key_metrics: computed from the SEC statements, each with its formula",
             risk_free_rates: "US Treasury par yield curve; ECB euro area par yields (AAA or all issuers)",
             fx: "fx_rate: ECB euro reference rates, any pair crossed through EUR",

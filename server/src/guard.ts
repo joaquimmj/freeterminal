@@ -52,8 +52,10 @@ export function utcDay(now = Date.now()): string {
   return new Date(now).toISOString().slice(0, 10);
 }
 
+/** Test isolation: clears the daily counter and the per-IP windows. */
 export function resetCounter(): void {
   Object.assign(counter, { day: "", pending: 0, total: 0, lastFlush: 0 });
+  windows.clear();
 }
 
 async function flush(db: D1Database, day: string, n: number): Promise<number | null> {
