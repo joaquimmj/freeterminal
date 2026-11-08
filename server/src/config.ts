@@ -1,6 +1,6 @@
 /** The one place the product name lives (CLAUDE.md: don't hardcode it elsewhere). */
 export const PRODUCT_NAME = "freeterminal";
-export const VERSION = "0.2.0";
+export const VERSION = "0.3.0";
 export const REPO_URL = "https://github.com/joaquimmj/freeterminal";
 export const SELF_HOST_URL = `${REPO_URL}/blob/main/docs/SELF_HOSTING.md`;
 

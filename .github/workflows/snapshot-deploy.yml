@@ -51,6 +51,9 @@ jobs:
         run: |
           NODE_OPTIONS=--max-old-space-size=6144 npx tsx scripts/build-snapshot.ts --bulk --work "$RUNNER_TEMP/sec"
           du -sh snapshot/v1; ls snapshot/v1/co | wc -l
+      - if: steps.cfg.outputs.ok == 'true'
+        name: Build Damodaran valuation inputs (about 1.5 MB download)
+        run: npx tsx scripts/build-damodaran.ts
       - name: Deploy to workers.dev
         if: ${{ steps.cfg.outputs.ok == 'true' && env.HAS_CF == 'true' }}
         env:

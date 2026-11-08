@@ -10,6 +10,7 @@ import { entitySearchUrl, factsUrl, pad, SecClient, submissionsUrl, TICKERS_URL 
 import type { Submissions } from "./sec/filings";
 import { buildCompanyRecord, type CompanyRecord } from "./sec/record";
 import type { CompanyFacts } from "./sec/xbrl";
+import type { DamodaranData } from "./damodaran";
 
 /** One row of the company index. */
 export interface CompanyRow {
@@ -48,10 +49,12 @@ const TTL_SUBMISSIONS = 6 * 3600;
 // Parsed snapshot data lives for the isolate's lifetime (snapshot changes only on deploy).
 let indexMemo: { key: AssetsLike | null; rows: Promise<CompanyRow[]> } | null = null;
 let manifestMemo: { key: AssetsLike | null; value: Promise<Manifest | null> } | null = null;
+let damodaranMemo: { key: AssetsLike | null; value: Promise<DamodaranData | null> } | null = null;
 
 export function resetMemos(): void {
   indexMemo = null;
   manifestMemo = null;
+  damodaranMemo = null;
 }
 
 export class Repo {
@@ -73,6 +76,14 @@ export class Repo {
       manifestMemo = { key: this.assets, value: this.asset<Manifest>("/manifest.json").catch(() => null) };
     }
     return manifestMemo.value;
+  }
+
+  /** Damodaran's valuation datasets (built into the snapshot), or null when not deployed. */
+  damodaran(): Promise<DamodaranData | null> {
+    if (!damodaranMemo || damodaranMemo.key !== this.assets) {
+      damodaranMemo = { key: this.assets, value: this.asset<DamodaranData>("/damodaran.json").catch(() => null) };
+    }
+    return damodaranMemo.value;
   }
 
   /** Every SEC registrant with a ticker (snapshot index, else SEC's live ticker list). */

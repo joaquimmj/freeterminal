@@ -47,6 +47,8 @@ function rateFixture(url: string): string | null {
   if (url.includes("daily-treasury-rates.csv/") && !url.includes("/2025/")) return "treasury_2026.csv";
   if (url.includes("daily-treasury-rates.csv/2025/")) return "treasury_2025.csv";
   if (url.includes("data-api.ecb.europa.eu") && url.includes("PY_10Y?lastNObservations=1")) return "ecb_PY_10Y_latest.csv";
+  const exr = /EXR\/D\.([A-Z]{3})\.EUR\.SP00\.A\?lastNObservations=1/.exec(url);
+  if (exr) return `ecb_EXR_${exr[1]}_latest.csv`;
   return null;
 }
 

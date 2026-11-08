@@ -5,6 +5,7 @@
 import { createMcpHandler, originValidationResponse } from "@modelcontextprotocol/server";
 import { DISCLAIMER, PRODUCT_NAME, REPO_URL, VERSION, type Env } from "./config";
 import { allowDaily, allowIp, CAPACITY_MESSAGE, RATE_MESSAGE } from "./guard";
+import { Fx } from "./fx";
 import { cachedFetchText, Rates } from "./rates";
 import { Repo } from "./repo";
 import { SecClient } from "./sec/edgar";
@@ -37,8 +38,10 @@ export function handlerFor(env: Env, refuse = ""): Handler {
     const cache = cacheOrNull();
     const sec = new SecClient({ userAgent: env.SEC_USER_AGENT, cache });
     const repo = new Repo(sec, env.ASSETS ?? null);
-    const rates = new Rates(cachedFetchText((i, init) => fetch(i, init), cache));
-    h = createMcpHandler(() => buildServer({ repo, rates }, refuse || undefined), { legacy: "stateless" });
+    const text = cachedFetchText((i, init) => fetch(i, init), cache);
+    const rates = new Rates(text);
+    const fx = new Fx(text);
+    h = createMcpHandler(() => buildServer({ repo, rates, fx }, refuse || undefined), { legacy: "stateless" });
     byMsg.set(refuse, h);
   }
   return h;

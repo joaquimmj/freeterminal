@@ -10,6 +10,7 @@ import worker from "../src/index";
 import { resetMemos } from "../src/repo";
 import { pad } from "../src/sec/edgar";
 import { buildCompanyRecord } from "../src/sec/record";
+import { syntheticDamodaran } from "./damodaran-fixture";
 import { facts, load, secFetch, submissions, tickerToCik } from "./helpers";
 
 const UA = "freeterminal-tests test@example.com";
@@ -57,6 +58,7 @@ function fixtureAssets(tickers: string[]) {
   const files = new Map<string, unknown>();
   const t = load<{ fields: string[]; data: unknown[][] }>("company_tickers_exchange.json");
   files.set("/v1/companies.json", t);
+  files.set("/v1/damodaran.json", syntheticDamodaran());
   files.set("/v1/manifest.json", { schema: 1, built_at: "2026-11-08T03:00:00Z", companies: t.data.length, records: tickers.length, source: "fixtures" });
   for (const tk of tickers) {
     const cik = t2c.get(tk)!;
@@ -75,7 +77,7 @@ describe("tools (live SEC path)", () => {
     for (const mode of ["auto", "legacy"] as const) {
       const client = await connect(baseEnv(), mode);
       const { tools } = await client.listTools();
-      expect(new Set(tools.map((t) => t.name))).toEqual(new Set(["company_lookup", "financial_statements", "key_metrics", "risk_free_rate", "data_status"]));
+      expect(new Set(tools.map((t) => t.name))).toEqual(new Set(["company_lookup", "financial_statements", "key_metrics", "risk_free_rate", "fx_rate", "valuation_inputs", "data_status"]));
       expect(tools.every((t) => t.annotations?.readOnlyHint)).toBe(true);
       await client.close();
     }
@@ -182,6 +184,31 @@ describe("M2 tools", () => {
     const eur = await call(baseEnv(), "risk_free_rate", { region: "EUR" });
     expect(eur.json.tenor).toBe("10Y");
     expect(eur.json.sources[0].license_note).toMatch(/ECB statistics/);
+  });
+});
+
+describe("valuation and FX tools", () => {
+  it("fx_rate converts through ECB reference rates", async () => {
+    const r = await call(baseEnv(), "fx_rate", { from: "EUR", to: "USD" });
+    expect(r.json.rate).toBe(1.1165);
+    expect(r.json.summary).toMatch(/^1 EUR = 1\.11650 USD/);
+  });
+
+  it("valuation_inputs returns country ERP and industry betas with attribution", async () => {
+    const env = baseEnv({ ASSETS: fixtureAssets(["AAPL"]) });
+    const r = await call(env, "valuation_inputs", { country: "France", industry: "Software", region: "Europe" });
+    expect(r.isError).toBe(false);
+    expect(r.json.country[0].equity_risk_premium).toBe(0.0501);
+    expect(r.json.industry[0].industry).toBe("Software (System & Application)");
+    expect(r.json.attribution).toMatch(/Damodaran/);
+    const list = await call(env, "valuation_inputs", {});
+    expect(list.json.industries).toContain("Advertising");
+  });
+
+  it("valuation_inputs explains itself when the datasets are not deployed", async () => {
+    const r = await call(baseEnv(), "valuation_inputs", { country: "France" });
+    expect(r.isError).toBe(true);
+    expect(r.text).toMatch(/not loaded/);
   });
 });
 
