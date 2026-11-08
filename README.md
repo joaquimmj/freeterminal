@@ -4,7 +4,7 @@
 
 A free, hosted, open-source data connector that lets Claude work like a junior analyst with official sources only: no paid terminal, no API key. Every number comes back with the filing it came from.
 
-> Status: private beta (M1). US SEC financials work today. Europe (ESEF/IFRS), rates and valuation inputs are next.
+> Status: beta. US SEC financials, computed ratios and risk-free rates (US + euro area) work today. Europe (ESEF/IFRS) and valuation inputs are next.
 
 ## Built on the shoulders of open-finance-mcp
 
@@ -25,6 +25,8 @@ See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 |---|---|
 | `company_lookup` | Name, ticker or CIK → canonical record: ticker, CIK, exchange, reporting standard, currency, fiscal year end |
 | `financial_statements` | Standardized income statement, cash flow and balance sheet: annual years plus LTM, with computed EBITDA, FCF, total and net debt. Every value carries its XBRL concept and accession, and a `sources` list gives each filing's URL |
+| `key_metrics` | Growth, CAGR, margins, FCF conversion, ROE, ROA, ROIC, net debt / EBITDA, interest coverage. Each value is computed and shows its formula |
+| `risk_free_rate` | Tenor-matched government yield for a WACC: US Treasury par yield curve, ECB euro area par yields (AAA or all issuers), latest or on a date |
 | `data_status` | Coverage, data freshness, limits, self-hosting link, disclaimer |
 
 ## How it stays free
@@ -35,7 +37,7 @@ See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Data sources
 
-SEC EDGAR (public domain). Terms, limits and attribution for every source are in [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md).
+SEC EDGAR (public domain), U.S. Treasury, and the ECB Data Portal (Source: ECB statistics). Terms, limits and attribution for every source are in [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md).
 
 ## Limitations
 

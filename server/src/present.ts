@@ -84,6 +84,39 @@ function fmt(v: number | null | undefined, currency: string): string {
   return `${v} ${currency}`;
 }
 
+/** One `sources` entry per cited SEC filing. */
+export function sourcesFor(rec: CompanyRecord, cited: Set<string>): Source[] {
+  const std = rec.financials!;
+  return [...cited].sort().map((a) => ({
+    name: "SEC EDGAR",
+    url: std.filings[a]?.url ?? "",
+    accession_or_id: a,
+    form: std.filings[a]?.form ?? null,
+    period: rec.report_dates[a] ?? null,
+    as_of: std.filings[a]?.filed ?? null,
+    license_note: SEC_LICENSE,
+  }));
+}
+
+/** The company block shared by the statement and metrics tools. */
+export function companyBlock(rec: CompanyRecord) {
+  const std = rec.financials!;
+  return {
+    name: std.entity_name ?? rec.name,
+    ticker: rec.tickers[0] ?? null,
+    cik: rec.cik,
+    exchange: rec.exchanges[0] || null,
+    region: "US",
+    reporting_standard: reportingStandard(std.taxonomy),
+    currency: std.currency,
+    fiscal_year_end: rec.fiscal_year_end,
+    sic: rec.sic,
+    sic_description: rec.sic_description,
+    financial_company: isFinancial(rec.sic),
+    foreign_private_issuer: rec.foreign_private_issuer,
+  };
+}
+
 export function financialStatements(rec: CompanyRecord, years: number, includeLtm: boolean) {
   const std = rec.financials!;
   const { columns, cited } = slice(std, years, includeLtm);
@@ -100,15 +133,7 @@ export function financialStatements(rec: CompanyRecord, years: number, includeLt
   if (rec.origin === "live") {
     warnings.push("Built live from SEC (not in the nightly snapshot); figures follow the same rules.");
   }
-  const sources: Source[] = [...cited].sort().map((a) => ({
-    name: "SEC EDGAR",
-    url: std.filings[a]?.url ?? "",
-    accession_or_id: a,
-    form: std.filings[a]?.form ?? null,
-    period: rec.report_dates[a] ?? null,
-    as_of: std.filings[a]?.filed ?? null,
-    license_note: SEC_LICENSE,
-  }));
+  const sources = sourcesFor(rec, cited);
   const ticker = rec.tickers[0] ?? null;
   const cur = std.currency;
   const last = columns.filter((c) => c.type === "annual").at(-1);
@@ -123,20 +148,7 @@ export function financialStatements(rec: CompanyRecord, years: number, includeLt
 
   return {
     summary,
-    company: {
-      name: std.entity_name ?? rec.name,
-      ticker,
-      cik: rec.cik,
-      exchange: rec.exchanges[0] || null,
-      region: "US",
-      reporting_standard: reportingStandard(std.taxonomy),
-      currency: cur,
-      fiscal_year_end: rec.fiscal_year_end,
-      sic: rec.sic,
-      sic_description: rec.sic_description,
-      financial_company: financial,
-      foreign_private_issuer: rec.foreign_private_issuer,
-    },
+    company: companyBlock(rec),
     units:
       `Monetary values in ${cur}, absolute (not thousands or millions). diluted_shares in shares; ` +
       `diluted_eps in ${cur} per share.`,

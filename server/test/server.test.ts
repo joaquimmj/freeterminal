@@ -75,7 +75,7 @@ describe("tools (live SEC path)", () => {
     for (const mode of ["auto", "legacy"] as const) {
       const client = await connect(baseEnv(), mode);
       const { tools } = await client.listTools();
-      expect(new Set(tools.map((t) => t.name))).toEqual(new Set(["company_lookup", "financial_statements", "data_status"]));
+      expect(new Set(tools.map((t) => t.name))).toEqual(new Set(["company_lookup", "financial_statements", "key_metrics", "risk_free_rate", "data_status"]));
       expect(tools.every((t) => t.annotations?.readOnlyHint)).toBe(true);
       await client.close();
     }
@@ -160,6 +160,28 @@ describe("tools (live SEC path)", () => {
     const r = await call(baseEnv({ SEC_USER_AGENT: "" }), "financial_statements", { ticker: "AAPL" });
     expect(r.isError).toBe(true);
     expect(r.text).toContain("SEC_USER_AGENT");
+  });
+});
+
+describe("M2 tools", () => {
+  it("key_metrics returns computed ratios with formulas and sources", async () => {
+    const r = await call(baseEnv({ ASSETS: fixtureAssets(["AAPL"]) }), "key_metrics", { ticker: "AAPL", years: 2 });
+    expect(r.isError).toBe(false);
+    expect(r.json.computed).toBe(true);
+    const fy = r.json.periods.find((p: { type: string }) => p.type === "annual");
+    expect(fy.metrics.gross_margin.formula).toBe("gross_profit / revenue");
+    expect(fy.metrics.gross_margin.value).toBeGreaterThan(0.3);
+    expect(r.json.sources.length).toBeGreaterThan(0);
+    expect(calls).toEqual([]);
+  });
+
+  it("risk_free_rate answers for US and EUR with a cited source", async () => {
+    const us = await call(baseEnv(), "risk_free_rate", { region: "US", tenor: "10Y" });
+    expect(us.json.rate_pct).toBeGreaterThan(0);
+    expect(us.json.sources[0].name).toMatch(/Treasury/);
+    const eur = await call(baseEnv(), "risk_free_rate", { region: "EUR" });
+    expect(eur.json.tenor).toBe("10Y");
+    expect(eur.json.sources[0].license_note).toMatch(/ECB statistics/);
   });
 });
 
