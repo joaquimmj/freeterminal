@@ -1,0 +1,59 @@
+# Nightly: rebuild the SEC snapshot from SEC bulk files and deploy the Worker
+# to workers.dev. Snapshot files only change when a company files something,
+# so each deploy uploads a small delta.
+#
+# Needs repository secrets (set by the repo owner; never commit them):
+#   CLOUDFLARE_API_TOKEN   token with "Workers Scripts: Edit" on the account
+#   CLOUDFLARE_ACCOUNT_ID
+#   SEC_USER_AGENT         "<app name> <contact email>" (SEC fair-access policy)
+# The job does nothing while SEC_USER_AGENT is unset, and skips the deploy while the Cloudflare secrets are missing.
+
+name: Snapshot + deploy
+on:
+  schedule:
+    - cron: "30 9 * * *" # 09:30 UTC, after SEC's overnight bulk refresh
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: snapshot-deploy
+  cancel-in-progress: false
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: server
+    env:
+      SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+      HAS_CF: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - name: Skip unless configured
+        id: cfg
+        run: |
+          if [ -n "$SEC_USER_AGENT" ]; then echo "ok=true" >> "$GITHUB_OUTPUT"; else echo "SEC_USER_AGENT secret not set: skipping."; fi
+      - if: steps.cfg.outputs.ok == 'true'
+        run: npm ci
+      - if: steps.cfg.outputs.ok == 'true'
+        run: npm test
+      - if: steps.cfg.outputs.ok == 'true'
+        name: Build snapshot (SEC bulk zips, ~2-3 GB download)
+        run: |
+          NODE_OPTIONS=--max-old-space-size=6144 npx tsx scripts/build-snapshot.ts --bulk --work "$RUNNER_TEMP/sec"
+          du -sh snapshot/v1; ls snapshot/v1/co | wc -l
+      - name: Deploy to workers.dev
+        if: ${{ steps.cfg.outputs.ok == 'true' && env.HAS_CF == 'true' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler deploy --var "SEC_USER_AGENT:$SEC_USER_AGENT"
