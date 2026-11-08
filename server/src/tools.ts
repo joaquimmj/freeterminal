@@ -9,7 +9,7 @@ import { ConfigError, ToolError, UpstreamError } from "./errors";
 import { countryPremium, DAMODARAN_PAGE, industryInputs, industryNames } from "./damodaran";
 import type { Fx } from "./fx";
 import { keyMetrics } from "./metrics";
-import { companyBlock, financialStatements, reportingStandard, slice, sourcesFor } from "./present";
+import { companyBlock, financialStatements, recordWarnings, reportingStandard, slice, sourcesFor } from "./present";
 import type { Rates } from "./rates";
 import type { Repo } from "./repo";
 import { isFinancial } from "./sec/filings";
@@ -29,6 +29,8 @@ industry betas and costs of capital). Europe (ESEF/IFRS) is coming.
 - For a DCF or WACC, take the risk-free rate from risk_free_rate with a tenor matching the forecast \
 horizon (usually 10Y), in the currency of the cash flows; the equity risk premium and an industry \
 unlevered beta from valuation_inputs; relever the beta at the company's D/E. Show every input with its source.
+- Units: risk_free_rate gives rate_pct (percent) AND rate_decimal; valuation_inputs and key_metrics give \
+decimals (0.05 = 5%). Use decimals everywhere before combining (e.g. CAPM = rate_decimal + beta × ERP).
 - IFRS filers report in their own currency: convert with fx_rate (period average for income statement, \
 period-end for balance sheet) before comparing with US companies.
 - Every number carries its XBRL concept and filing accession; each response has a \`sources\` array. \
@@ -218,6 +220,10 @@ function registerTools({ repo, rates, fx }: Deps, guarded: (run: () => Promise<T
         const { periods, revenue_cagr } = keyMetrics(rec.financials, n, ltm, financial);
         const { cited } = slice(rec.financials, n + 1, ltm);
         const company = companyBlock(rec);
+        const warnings = recordWarnings(rec, cited);
+        if (financial) {
+          warnings.push("financial_company: EBITDA-based ratios and ROIC are not meaningful for banks and insurers (null).");
+        }
         return ok({
           summary:
             `${company.name} (${company.ticker ?? `CIK ${rec.cik}`}): ${periods.length} period(s) of ratios computed by ` +
@@ -227,9 +233,7 @@ function registerTools({ repo, rates, fx }: Deps, guarded: (run: () => Promise<T
           computed: true,
           revenue_cagr,
           periods,
-          warnings: financial
-            ? ["financial_company: EBITDA-based ratios and ROIC are not meaningful for banks and insurers (null)."]
-            : [],
+          warnings,
           sources: sourcesFor(rec, cited),
           data_as_of: rec.built_at,
           disclaimer: DISCLAIMER,
@@ -258,7 +262,9 @@ function registerTools({ repo, rates, fx }: Deps, guarded: (run: () => Promise<T
       guarded(async () => {
         const r = region === "US" ? await rates.us(tenor ?? "10Y", date) : await rates.eur(tenor ?? "10Y", date, eur_curve ?? "aaa");
         return ok({
-          summary: `${r.region} ${r.tenor} government yield: ${r.rate_pct.toFixed(3)}% on ${r.date} (${r.source.name}).`,
+          summary:
+            `${r.region} ${r.tenor} government yield: ${r.rate_pct.toFixed(3)}% (decimal ${r.rate_decimal.toFixed(5)}) ` +
+            `on ${r.date} (${r.source.name}).`,
           ...r,
           sources: [r.source],
           note:
@@ -335,6 +341,12 @@ function registerTools({ repo, rates, fx }: Deps, guarded: (run: () => Promise<T
           out.region = reg;
         }
         const dates = [...new Set(Object.values(d.datasets).map((x) => x.updated))].filter(Boolean);
+        const partial = [...((out.country as Array<{ match: string }>) ?? []), ...((out.industry as Array<{ match: string }>) ?? [])].some(
+          (x) => x.match === "partial",
+        );
+        const warnings = partial
+          ? ["Partial name match: confirm the country/industry shown is the one the user means before using its figures."]
+          : [];
         return ok({
           summary:
             (country ? `Country risk data for ${JSON.stringify(country)}. ` : "") +
@@ -343,6 +355,7 @@ function registerTools({ repo, rates, fx }: Deps, guarded: (run: () => Promise<T
             `Damodaran datasets updated ${dates.join(", ")}.`,
           ...out,
           units: "Decimals (0.05 = 5%). Betas and D/E are plain numbers.",
+          warnings,
           attribution: "Data: Aswath Damodaran, NYU Stern (pages.stern.nyu.edu/~adamodar). Cite him when you use these inputs.",
           disclaimer: DISCLAIMER,
         });

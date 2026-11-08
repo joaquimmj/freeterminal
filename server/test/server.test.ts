@@ -3,6 +3,8 @@
 // (c) 2026 Nathanael Johnson, MIT License (tests/test_server.py @ 8bcf3af0).
 
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/config";
 import { resetCounter } from "../src/guard";
@@ -23,8 +25,13 @@ beforeEach(() => {
   resetMemos();
   resetCounter();
   vi.stubGlobal("fetch", secFetch(calls));
+  // Rate and FX fixtures are as of 2026-11-08; freeze the calendar there (timers stay real).
+  vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-11-08T12:00:00Z") });
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 const baseEnv = (over: Partial<Env> = {}): Env => ({ SEC_USER_AGENT: UA, ...over });
 
@@ -179,7 +186,7 @@ describe("M2 tools", () => {
 
   it("risk_free_rate answers for US and EUR with a cited source", async () => {
     const us = await call(baseEnv(), "risk_free_rate", { region: "US", tenor: "10Y" });
-    expect(us.json.rate_pct).toBeGreaterThan(0);
+    expect([us.json.rate_pct, us.json.rate_decimal, us.json.date]).toEqual([4.86, 0.0486, "2026-11-06"]);
     expect(us.json.sources[0].name).toMatch(/Treasury/);
     const eur = await call(baseEnv(), "risk_free_rate", { region: "EUR" });
     expect(eur.json.tenor).toBe("10Y");
@@ -203,6 +210,25 @@ describe("valuation and FX tools", () => {
     expect(r.json.attribution).toMatch(/Damodaran/);
     const list = await call(env, "valuation_inputs", {});
     expect(list.json.industries).toContain("Advertising");
+  });
+
+  it("a transient asset failure is not remembered as 'not deployed'", async () => {
+    let n = 0;
+    const good = fixtureAssets(["AAPL"]);
+    const flaky = {
+      fetch: async (input: Request | string) => {
+        const path = new URL(typeof input === "string" ? input : input.url).pathname;
+        if (path === "/v1/damodaran.json" && n++ === 0) return new Response("boom", { status: 503 });
+        return good.fetch(input);
+      },
+    };
+    const env = baseEnv({ ASSETS: flaky });
+    const first = await call(env, "valuation_inputs", { country: "France" });
+    expect(first.isError).toBe(true);
+    expect(first.text).toMatch(/Upstream data source failed/);
+    const second = await call(env, "valuation_inputs", { country: "France" });
+    expect(second.isError).toBe(false);
+    expect(second.json.country[0].country).toBe("France");
   });
 
   it("valuation_inputs explains itself when the datasets are not deployed", async () => {
@@ -288,6 +314,16 @@ describe("guardrails", () => {
       ctx,
     );
     expect(res.status).toBe(403);
+  });
+
+  it("does not serve the Damodaran dataset as a public download", async () => {
+    // In production Cloudflare serves assets BEFORE the Worker, so the guard is the config:
+    // the path must be routed to the Worker (run_worker_first), which answers 404.
+    const cfg = readFileSync(join(import.meta.dirname, "..", "wrangler.jsonc"), "utf8");
+    const runFirst = /"run_worker_first"\s*:\s*(\[[^\]]*\])/.exec(cfg);
+    expect(runFirst && JSON.parse(runFirst[1]!)).toContain("/v1/damodaran.json");
+    const res = await worker.fetch(new Request("https://ft.test/v1/damodaran.json"), baseEnv({ ASSETS: fixtureAssets(["AAPL"]) }), ctx);
+    expect(res.status).toBe(404);
   });
 
   it("serves a small landing JSON at /", async () => {

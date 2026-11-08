@@ -3,45 +3,51 @@
 // Reuse: "Source: ECB statistics." (docs/DATA_SOURCES.md §5).
 
 import { PRODUCT_NAME } from "./config";
+import { daysBetween, pastDate, shiftDays, staleness, todayIso, ttlFor } from "./dates";
 import { ToolError } from "./errors";
-import { parseEcbCsv } from "./rates";
+import { isEcbCsv, parseEcbCsv, type FetchText } from "./rates";
 
-/** Currencies with an ECB daily reference rate (as of 2026). */
+/**
+ * Currencies with an ECB daily reference rate (as of 2026). BGN is gone:
+ * Bulgaria adopted the euro on 2026-01-01 and its last ECB fixing is 2025-12-31.
+ */
 export const ECB_CURRENCIES = [
-  "USD", "JPY", "BGN", "CZK", "DKK", "GBP", "HUF", "PLN", "RON", "SEK", "CHF", "ISK", "NOK", "TRY", "AUD",
+  "USD", "JPY", "CZK", "DKK", "GBP", "HUF", "PLN", "RON", "SEK", "CHF", "ISK", "NOK", "TRY", "AUD",
   "BRL", "CAD", "CNY", "HKD", "IDR", "ILS", "INR", "KRW", "MXN", "MYR", "NZD", "PHP", "SGD", "THB", "ZAR",
 ];
 
-export function exrUrl(cur: string, start?: string, end?: string): string {
-  const range = start && end ? `startPeriod=${start}&endPeriod=${end}` : "lastNObservations=1";
-  return `https://data-api.ecb.europa.eu/service/data/EXR/D.${cur}.EUR.SP00.A?${range}&format=csvdata&detail=dataonly`;
+export function exrUrl(cur: string, start: string, end: string): string {
+  return `https://data-api.ecb.europa.eu/service/data/EXR/D.${cur}.EUR.SP00.A?startPeriod=${start}&endPeriod=${end}&format=csvdata&detail=dataonly`;
 }
 
 function code(c: string): string {
   const s = c.trim().toUpperCase();
+  if (s === "BGN") throw new ToolError("BGN was replaced by the euro on 2026-01-01 (fixed at 1.95583 BGN per EUR); use EUR.");
   if (s !== "EUR" && !ECB_CURRENCIES.includes(s)) {
     throw new ToolError(`currency ${JSON.stringify(c)} has no ECB reference rate; supported: EUR, ${ECB_CURRENCIES.join(", ")}`);
   }
   return s;
 }
 
-function isoDate(s: string, name: string): string {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || Number.isNaN(Date.parse(s))) throw new ToolError(`${name} must be YYYY-MM-DD`);
-  return s;
-}
-
-function shift(iso: string, days: number): string {
-  return new Date(Date.parse(`${iso}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
-}
-
 type Obs = Map<string, number>; // date -> units of currency per 1 EUR
 
-export class Fx {
-  constructor(private readonly fetchText: (url: string, ttlSeconds: number) => Promise<string>) {}
+/** Days of history fetched for a "latest" or dated rate, so both legs of a cross share a fixing date. */
+const LOOKBACK_DAYS = 14;
+/**
+ * Longest averaging window: about 1,300 daily fixings per leg. 27 years measured 8-12 ms of CPU,
+ * over the Workers Free 10 ms limit; 5 years stays around 2 ms.
+ */
+const MAX_AVERAGE_DAYS = 5 * 366;
 
-  private async series(cur: string, start?: string, end?: string): Promise<Obs> {
+export class Fx {
+  constructor(
+    private readonly fetchText: FetchText,
+    private readonly today: () => string = todayIso,
+  ) {}
+
+  private async series(cur: string, start: string, end: string): Promise<Obs> {
     if (cur === "EUR") return new Map();
-    const text = await this.fetchText(exrUrl(cur, start, end), start ? 30 * 86_400 : 6 * 3600);
+    const text = await this.fetchText(exrUrl(cur, start, end), ttlFor(end, this.today()), isEcbCsv);
     return new Map(parseEcbCsv(text).map((o) => [o.date, o.value]));
   }
 
@@ -59,6 +65,7 @@ export class Fx {
     const from = code(fromIn);
     const to = code(toIn);
     if (from === to) throw new ToolError("from and to are the same currency");
+    const today = this.today();
     const series = [from, to].filter((c) => c !== "EUR").map((c) => `EXR.D.${c}.EUR.SP00.A`);
     // ECB terms: any modification (averages, cross rates) must be stated explicitly.
     const derivation =
@@ -77,41 +84,54 @@ export class Fx {
     };
 
     if (opts.averageFrom || opts.averageTo) {
+      if (opts.on) throw new ToolError("pass either `on` or `average_from`/`average_to`, not both");
       if (!opts.averageFrom || !opts.averageTo) throw new ToolError("pass both average_from and average_to");
-      const s = isoDate(opts.averageFrom, "average_from");
-      const e = isoDate(opts.averageTo, "average_to");
+      const s = pastDate(opts.averageFrom, "average_from", today);
+      const e = pastDate(opts.averageTo, "average_to", today);
       if (s > e) throw new ToolError("average_from must be on or before average_to");
+      if (daysBetween(s, e) > MAX_AVERAGE_DAYS) {
+        throw new ToolError("averaging window is longer than 5 years; split it into fiscal years and average those instead");
+      }
       const [a, b] = await Promise.all([this.series(from, s, e), this.series(to, s, e)]);
-      const pts = Fx.cross(from, to, a, b);
+      const pts = Fx.cross(from, to, a, b).filter(([d]) => d >= s && d <= e);
       if (!pts.length) throw new ToolError(`No ECB reference rates between ${s} and ${e}.`);
       const mean = pts.reduce((x, [, v]) => x + v, 0) / pts.length;
+      const first = pts[0]![0];
+      const last = pts.at(-1)![0];
+      const warnings: string[] = [];
+      if (daysBetween(last, e) > 7) warnings.push(`No fixings after ${last}: the average covers ${first} to ${last}, not the full period to ${e}.`);
       return {
         from,
         to,
         rate: mean,
-        basis: `average of ${pts.length} daily ECB reference rates, ${pts[0]![0]} to ${pts.at(-1)![0]} (the rate IFRS uses for income-statement items); average computed by ${PRODUCT_NAME}${derivation}`,
-        sources: [{ ...source, period: `${s}/${e}`, as_of: pts.at(-1)![0] }],
+        basis:
+          `average of ${pts.length} daily ECB reference rates, ${first} to ${last} (the rate IFRS uses for ` +
+          `income-statement items); average computed by ${PRODUCT_NAME}${derivation}`,
+        warnings,
+        sources: [{ ...source, period: `${first}/${last}`, as_of: last }],
       };
     }
 
-    // Latest, or the last ECB fixing on or before `on` (looking back up to 10 days for holidays).
-    const day = opts.on ? isoDate(opts.on, "on") : undefined;
-    const [a, b] = await Promise.all([
-      this.series(from, day && shift(day, -10), day),
-      this.series(to, day && shift(day, -10), day),
-    ]);
-    const pts = Fx.cross(from, to, a, b).filter(([d]) => !day || d <= day);
-    const last = pts.at(-1);
-    if (!last) throw new ToolError(`No ECB reference rate on or before ${day ?? "today"}.`);
+    // Latest, or the last fixing on or before `on`. A two-week window per leg (not just the last
+    // observation), so the newest date BOTH legs have is used even if one was cached before today's fixing.
+    const day = opts.on ? pastDate(opts.on, "on", today) : today;
+    const start = shiftDays(day, -LOOKBACK_DAYS);
+    const [a, b] = await Promise.all([this.series(from, start, day), this.series(to, start, day)]);
+    const last = Fx.cross(from, to, a, b)
+      .filter(([d]) => d <= day)
+      .at(-1);
+    if (!last) throw new ToolError(`No ECB reference rate in the two weeks up to ${day}.`);
+    const stale = opts.on ? null : staleness(last[0], today, `ECB ${series.join("/")}`);
     return {
       from,
       to,
       rate: last[1],
       basis:
         `ECB reference rate on ${last[0]}` +
-        (day && last[0] !== day ? ` (last fixing on or before ${day})` : "") +
+        (opts.on && last[0] !== day ? ` (last fixing on or before ${day})` : "") +
         derivation +
         "; use the period-end rate for balance-sheet items",
+      warnings: stale ? [stale] : [],
       sources: [{ ...source, period: last[0], as_of: last[0] }],
     };
   }

@@ -1,6 +1,7 @@
 // Ratios computed from the standardized statements. Each value is labeled with
 // its formula; if any input is missing (null), the ratio is null, never 0.
 
+import { daysBetween } from "./dates";
 import { slice } from "./present";
 import type { Column, Standardized } from "./sec/xbrl";
 
@@ -24,9 +25,9 @@ function getter(col: Column): Get {
     col.values[k]?.value ?? col.balance_sheet[k]?.value ?? col.derived[k]?.value ?? null;
 }
 
-function ratio(num: number | null, den: number | null, formula: string, note?: string): Metric | null {
+function ratio(num: number | null, den: number | null, formula: string): Metric | null {
   if (num === null || den === null || den === 0) return null;
-  return note ? { value: num / den, formula, note } : { value: num / den, formula };
+  return { value: num / den, formula };
 }
 
 function avg(a: number | null, b: number | null): number | null {
@@ -42,17 +43,27 @@ function taxRate(g: Get): number | null {
   return t >= 0 && t <= 0.5 ? t : null; // outside 0-50% the proxy is meaningless
 }
 
+/** Year-over-year comparisons need the previous column to end about a year earlier (a missing fiscal year or a FY-end change breaks that). */
+function oneYearApart(col: Column, prev: Column | null): boolean {
+  if (!prev) return false;
+  const d = daysBetween(prev.end, col.end);
+  return d >= 350 && d <= 380;
+}
+
 export function metricsFor(col: Column, prev: Column | null, financial: boolean): Record<string, Metric | null> {
   const g = getter(col);
   const p = prev ? getter(prev) : null;
   const rev = g("revenue");
   const m: Record<string, Metric | null> = {};
+  const yoy = oneYearApart(col, prev);
 
   m.revenue_growth =
+    yoy &&
     p && rev !== null && p("revenue") !== null && p("revenue")! > 0
       ? { value: rev / p("revenue")! - 1, formula: `revenue / revenue(${prev!.label}) - 1` }
       : null;
   m.net_income_growth =
+    yoy &&
     p && g("net_income") !== null && p("net_income") !== null && p("net_income")! > 0
       ? { value: g("net_income")! / p("net_income")! - 1, formula: `net_income / net_income(${prev!.label}) - 1` }
       : null;
@@ -64,11 +75,16 @@ export function metricsFor(col: Column, prev: Column | null, financial: boolean)
   m.capex_to_revenue = ratio(g("capex"), rev, "capex / revenue");
   m.fcf_conversion = ratio(g("free_cash_flow"), g("net_income"), "free_cash_flow / net_income");
 
+  // Averages use the previous column's period-end balance: one year earlier for a fiscal year,
+  // the last fiscal year end for LTM. The formula names which.
   const eqAvg = p ? avg(g("total_equity"), p("total_equity")) : null;
   const assetsAvg = p ? avg(g("total_assets"), p("total_assets")) : null;
+  const at = prev ? `at ${prev.end}` : "";
   m.roe =
-    eqAvg !== null && eqAvg > 0 ? ratio(g("net_income"), eqAvg, "net_income / average(total_equity, prior year)") : null;
-  m.roa = ratio(g("net_income"), assetsAvg, "net_income / average(total_assets, prior year)");
+    eqAvg !== null && eqAvg > 0
+      ? ratio(g("net_income"), eqAvg, `net_income / average(total_equity at ${col.end}, total_equity ${at})`)
+      : null;
+  m.roa = ratio(g("net_income"), assetsAvg, `net_income / average(total_assets at ${col.end}, total_assets ${at})`);
 
   if (financial) {
     // EBITDA, EV-style leverage and ROIC are not meaningful for banks and insurers.
@@ -119,9 +135,10 @@ export function revenueCagr(columns: Column[]): Metric | null {
   const last = annual[annual.length - 1]!;
   const a = first.values.revenue?.value ?? null;
   const b = last.values.revenue?.value ?? null;
-  const n = annual.length - 1;
-  if (a === null || b === null || a <= 0 || b <= 0) return null;
-  return { value: (b / a) ** (1 / n) - 1, formula: `(revenue(${last.label}) / revenue(${first.label}))^(1/${n}) - 1` };
+  // Exponent from the elapsed time, not the column count, so a missing fiscal year doesn't inflate the CAGR.
+  const years = Math.round((daysBetween(first.end, last.end) / 365.25) * 100) / 100;
+  if (a === null || b === null || a <= 0 || b <= 0 || years < 0.9) return null;
+  return { value: (b / a) ** (1 / years) - 1, formula: `(revenue(${last.label}) / revenue(${first.label}))^(1/${years}) - 1` };
 }
 
 export function keyMetrics(std: Standardized, years: number, includeLtm: boolean, financial: boolean) {

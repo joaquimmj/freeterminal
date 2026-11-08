@@ -117,21 +117,27 @@ export function companyBlock(rec: CompanyRecord) {
   };
 }
 
-export function financialStatements(rec: CompanyRecord, years: number, includeLtm: boolean) {
-  const std = rec.financials!;
-  const { columns, cited } = slice(std, years, includeLtm);
+/** Warnings every tool built on a company record must carry (stale XBRL data, live-built record). */
+export function recordWarnings(rec: CompanyRecord, cited: Set<string>): string[] {
   const warnings: string[] = [];
   const stale = stalenessWarning(rec.latest_periodic, cited);
   if (stale) warnings.push(stale);
+  if (rec.origin === "live") {
+    warnings.push("Built live from SEC (not in the nightly snapshot); figures follow the same rules.");
+  }
+  return warnings;
+}
+
+export function financialStatements(rec: CompanyRecord, years: number, includeLtm: boolean) {
+  const std = rec.financials!;
+  const { columns, cited } = slice(std, years, includeLtm);
+  const warnings = recordWarnings(rec, cited);
   const financial = isFinancial(rec.sic);
   if (financial) {
     warnings.push(
       `financial_company (SIC ${rec.sic} ${rec.sic_description ?? ""}): EBITDA, net debt and EV multiples ` +
         "are not meaningful; use P/E and P/B, and don't run a standard FCF-based DCF.",
     );
-  }
-  if (rec.origin === "live") {
-    warnings.push("Built live from SEC (not in the nightly snapshot); figures follow the same rules.");
   }
   const sources = sourcesFor(rec, cited);
   const ticker = rec.tickers[0] ?? null;

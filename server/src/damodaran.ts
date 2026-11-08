@@ -31,6 +31,8 @@ export interface CountryRow {
   default_spread: number | null;
   equity_risk_premium: number | null;
   country_risk_premium: number | null;
+  /** What the premium is based on: a Moody's rating, or (frontier markets) a PRS risk score. */
+  basis?: string;
 }
 
 export interface DatasetMeta {
@@ -55,16 +57,61 @@ export const DAMODARAN_PAGE = "https://pages.stern.nyu.edu/~adamodar/New_Home_Pa
 const LICENSE =
   "Aswath Damodaran, NYU Stern, public datasets (pages.stern.nyu.edu/~adamodar), shared freely; acknowledge the source.";
 
+/** Lowercase words with punctuation dropped: "R.E.I.T." -> "reit", "Banks (Regional)" -> "banks regional". */
 function norm(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return s
+    .toLowerCase()
+    .replace(/\./g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
 }
 
-/** Exact (normalized) match first, then substring matches. */
-function find<T>(rows: T[], key: (r: T) => string, q: string): T[] {
-  const n = norm(q);
+/** Common names that are not Damodaran's spelling (and must never fall through to a substring match). */
+const COUNTRY_ALIASES: Record<string, string> = {
+  uk: "united kingdom",
+  "great britain": "united kingdom",
+  britain: "united kingdom",
+  england: "united kingdom",
+  us: "united states",
+  usa: "united states",
+  "united states of america": "united states",
+  america: "united states",
+  uae: "united arab emirates",
+  "south korea": "korea",
+  "republic of korea": "korea",
+  "north korea": "korea dpr",
+  czechia: "czech republic",
+  turkiye: "turkey",
+  "north macedonia": "macedonia",
+  holland: "netherlands",
+  "the netherlands": "netherlands",
+  "viet nam": "vietnam",
+  drc: "congo democratic republic of",
+};
+const INDUSTRY_ALIASES: Record<string, string> = { reits: "reit", "real estate investment trust": "reit" };
+
+const singular = (w: string) => (w.length > 3 && w.endsWith("s") ? w.slice(0, -1) : w);
+
+export type MatchKind = "exact" | "partial";
+
+/**
+ * Exact name (or alias) first. Otherwise every query word must appear as a whole
+ * word in the name (plural-insensitive). Never a raw substring: "UK" must not
+ * match "Ukraine". Partial matches are labeled so the model confirms the entity.
+ */
+function find<T>(rows: T[], key: (r: T) => string, q: string, aliases: Record<string, string>): Array<T & { match: MatchKind }> {
+  const n0 = norm(q);
+  const n = aliases[n0] ?? n0;
   const exact = rows.filter((r) => norm(key(r)) === n);
-  if (exact.length) return exact;
-  return rows.filter((r) => norm(key(r)).includes(n));
+  if (exact.length) return exact.map((r) => ({ ...r, match: "exact" as const }));
+  const words = n.split(" ").filter(Boolean).map(singular);
+  if (!words.length) return [];
+  return rows
+    .filter((r) => {
+      const have = new Set(norm(key(r)).split(" ").map(singular));
+      return words.every((w) => have.has(w));
+    })
+    .map((r) => ({ ...r, match: "partial" as const }));
 }
 
 function source(d: DamodaranData, dataset: string, id: string) {
@@ -80,7 +127,7 @@ function source(d: DamodaranData, dataset: string, id: string) {
 }
 
 export function countryPremium(d: DamodaranData, country: string) {
-  const hits = find(d.countries, (c) => c.country, country);
+  const hits = find(d.countries, (c) => c.country, country, COUNTRY_ALIASES);
   if (!hits.length) {
     throw new ToolError(
       `No country matches ${JSON.stringify(country)} in Damodaran's country risk premiums. ` +
@@ -99,7 +146,7 @@ export function countryPremium(d: DamodaranData, country: string) {
 
 export function industryInputs(d: DamodaranData, region: IndustryRegion, industry: string) {
   const rows = d.industries[region] ?? [];
-  const hits = find(rows, (r) => r.industry, industry);
+  const hits = find(rows, (r) => r.industry, industry, INDUSTRY_ALIASES);
   if (!hits.length) {
     throw new ToolError(
       `No ${region} industry matches ${JSON.stringify(industry)}. Call valuation_inputs with no industry ` +

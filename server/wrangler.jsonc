@@ -6,7 +6,9 @@
   "compatibility_date": "2026-11-01",
   "compatibility_flags": ["nodejs_compat"],
   // Nightly SEC snapshot (scripts/build-snapshot.ts). Served before the Worker runs: free, no CPU.
-  "assets": { "directory": "./snapshot", "binding": "ASSETS" },
+  // run_worker_first: the Worker (not the public asset server) answers these paths, so the Damodaran
+  // figures are only served through valuation_inputs, never as a bulk download (docs/DATA_SOURCES.md §8).
+  "assets": { "directory": "./snapshot", "binding": "ASSETS", "run_worker_first": ["/v1/damodaran.json"] },
   "workers_dev": true,
   "observability": { "enabled": true },
   "vars": {

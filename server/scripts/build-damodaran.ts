@@ -5,6 +5,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import * as XLSX from "xlsx";
+import { PRODUCT_NAME, REPO_URL } from "../src/config";
 import { DAMODARAN_PAGE, type DamodaranData, type IndustryRegion } from "../src/damodaran";
 import { DAMODARAN_BASE, FILES, mergeIndustries, parseBetas, parseCountries, parseWacc, validate } from "./damodaran-parse";
 
@@ -14,7 +15,7 @@ const arg = (n: string) => {
 };
 const FROM = arg("from");
 const OUT = resolve(arg("out") ?? "snapshot");
-const UA = "freeterminal snapshot build (+https://github.com/joaquimmj/freeterminal)";
+const UA = `${PRODUCT_NAME} snapshot build (+${REPO_URL})`;
 
 async function load(file: string): Promise<{ wb: XLSX.WorkBook; lastModified: string | null }> {
   if (FROM) {

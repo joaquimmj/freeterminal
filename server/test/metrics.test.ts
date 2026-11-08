@@ -39,7 +39,22 @@ describe("key metrics", () => {
     expect(r.periods.map((p) => p.type)).toEqual(["annual", "annual", "annual", "ltm"]);
     expect(r.periods[0]!.metrics.revenue_growth).not.toBeNull(); // the extra year feeds the oldest growth
     expect(r.periods.at(-1)!.metrics.revenue_growth).toBeNull(); // LTM growth is not like-for-like
-    expect(r.revenue_cagr!.formula).toMatch(/\^\(1\/2\) - 1$/);
+    // Exponent = years elapsed between fiscal year ends: Apple's 52/53-week years span 728 days = 1.99 years.
+    expect(r.revenue_cagr!.formula).toBe("(revenue(FY2025) / revenue(FY2023))^(1/1.99) - 1");
+  });
+
+  it("growth is null when the previous column is not one year earlier (missing fiscal year)", () => {
+    const s = std("AAPL");
+    const annual = s.periods.filter((p) => p.type === "annual");
+    const gappy = { ...s, periods: annual.filter((_, i) => i !== annual.length - 2) }; // drop the middle year
+    const r = keyMetrics(gappy, 2, false, false);
+    expect(r.periods.at(-1)!.metrics.revenue_growth).toBeNull();
+    expect(r.periods.at(-1)!.metrics.gross_margin).not.toBeNull();
+  });
+
+  it("LTM averages name the balance-sheet dates they use", () => {
+    const ltm = keyMetrics(std("AAPL"), 1, true, false).periods.at(-1)!;
+    expect(ltm.metrics.roe!.formula).toMatch(/total_equity at \d{4}-\d{2}-\d{2}, total_equity at \d{4}-\d{2}-\d{2}/);
   });
 
   it("banks get no EBITDA-based ratios or ROIC", () => {

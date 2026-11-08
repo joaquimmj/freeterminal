@@ -13,7 +13,16 @@ const book = (sheet: string, aoa: unknown[][]) => {
   return XLSX.read(XLSX.write(wb, { type: "buffer", bookType: "xls" }));
 };
 
-const INDUSTRIES = ["Advertising", "Retail (General)", "Software (System & Application)", "Utility (General)"];
+const INDUSTRIES = [
+  "Advertising",
+  "Bank (Money Center)",
+  "Banks (Regional)",
+  "R.E.I.T.",
+  "Retail (General)",
+  "Retail (REITs)",
+  "Software (System & Application)",
+  "Utility (General)",
+];
 const many = (n: number) => Array.from({ length: n }, (_, i) => `Industry ${i + 1}`);
 
 export function betasBook(names = [...INDUSTRIES, ...many(60)]) {
@@ -38,18 +47,27 @@ export function waccBook(names = [...INDUSTRIES, ...many(60)]) {
   ]);
 }
 
-export function countriesBook(extra = 120) {
+export function countriesBook(extra = 120, header = ["Country", "Africa", "Moody's rating", "Rating-based Default Spread", "Total Equity Risk Premium", "Country Risk Premium", "CDS"]) {
   const wb = XLSX.utils.book_new();
   const rows: unknown[][] = [
     ["Country and Equity Risk Premiums"],
     ["Date of update:", 44561],
     ["Enter the current risk premium for a mature equity market", null, null, null, 0.0423],
     ["Enter the current risk premium for the US =", null, null, null, 0.0446],
-    ["Country", "Africa", "Moody's rating", "Rating-based Default Spread", "Total Equity Risk Premium", "Country Risk Premium", "CDS"],
+    header,
     ["France", "Western Europe", "Aa3", 0.0051, 0.0501, 0.0078, 0.005],
     ["Germany", "Western Europe", "Aaa", 0, 0.0423, 0, 0.002],
     ["United States", "North America", "Aa1", 0.0023, 0.0446, 0.0023, 0.003],
-    ...Array.from({ length: extra }, (_, i) => [`Country ${i + 1}`, "Elsewhere", "Baa1", 0.01, 0.06, 0.02, "NA"]),
+    ["United Kingdom", "Western Europe", "Aa3", 0.0051, 0.0501, 0.0078, 0.004],
+    ["Ukraine", "Eastern Europe & Russia", "Ca", 0.1, 0.1423, 0.1, "NA"],
+    ["Korea", "Asia", "Aa2", 0.0042, 0.0487, 0.0064, 0.004],
+    // ERP = mature ERP (0.0423) + CRP, as in Damodaran's sheet.
+    ...Array.from({ length: extra }, (_, i) => [`Country ${i + 1}`, "Elsewhere", "Baa1", 0.01, 0.0623, 0.02, "NA"]),
+    // A second section with its own layout, which must not be read with the first table's columns.
+    ["Frontier Markets (no sovereign ratings)"],
+    ["Country", "PRS Composite Risk Score", "ERP", "CRP", "Default Spread"],
+    ["Russia", 70.25, 0.0813, 0.039, 0.0256],
+    [null, "NR", "NA"],
   ];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), "ERPs by country");
   return XLSX.read(XLSX.write(wb, { type: "buffer", bookType: "xlsx" }));

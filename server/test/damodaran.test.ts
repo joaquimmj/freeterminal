@@ -30,7 +30,19 @@ describe("Damodaran parser", () => {
       default_spread: 0.0051,
       equity_risk_premium: 0.0501,
       country_risk_premium: 0.0078,
+      basis: "Moody's sovereign rating",
     });
+  });
+
+  it("reads the frontier-markets section with its own columns", () => {
+    const ru = parseCountries(countriesBook()).countries.find((x) => x.country === "Russia")!;
+    expect(ru).toMatchObject({ equity_risk_premium: 0.0813, country_risk_premium: 0.039, default_spread: 0.0256, moodys_rating: null });
+    expect(ru.basis).toMatch(/PRS composite risk score 70.25/);
+  });
+
+  it("a renamed or missing column fails the build instead of shifting values", () => {
+    const renamed = ["Country", "Region", "Moody's rating", "Default Spread (rating)", "Total Equity Risk Premium", "Country Risk Premium"];
+    expect(() => parseCountries(countriesBook(120, renamed))).toThrow(/layout changed/);
   });
 
   it("validate() rejects a broken parse instead of shipping it", () => {
@@ -39,6 +51,12 @@ describe("Damodaran parser", () => {
     expect(() => validate({ ...d, countries: d.countries.slice(0, 10) })).toThrow(/countries/);
     const noUs = { ...d, countries: d.countries.filter((c) => c.country !== "United States") };
     expect(() => validate(noUs)).toThrow(/US equity risk premium/);
+    // Shifted columns break Damodaran's ERP = mature ERP + CRP identity.
+    const shifted = { ...d, countries: d.countries.map((c) => ({ ...c, country_risk_premium: c.default_spread })) };
+    expect(() => validate(shifted)).toThrow(/identity/);
+    // A betas/wacc join that matched nothing leaves cost of capital empty.
+    const noWacc = { ...d, industries: { ...d.industries, US: d.industries.US.map((r) => ({ ...r, cost_of_capital: null })) } };
+    expect(() => validate(noWacc)).toThrow(/cost of capital/);
   });
 });
 
@@ -52,6 +70,21 @@ describe("Damodaran lookups", () => {
     expect(fr!.source.license_note).toMatch(/Damodaran/);
     expect(() => countryPremium(d, "Atlantis")).toThrow(/English country name/);
     expect(() => countryPremium(d, "Country")).toThrow(/be more specific/);
+  });
+
+  it("never returns a different country for an abbreviation (UK is not Ukraine)", () => {
+    expect(countryPremium(d, "UK").map((c) => c.country)).toEqual(["United Kingdom"]);
+    expect(countryPremium(d, "USA").map((c) => c.country)).toEqual(["United States"]);
+    expect(countryPremium(d, "South Korea").map((c) => c.country)).toEqual(["Korea"]);
+    expect(countryPremium(d, "Ukraine")[0]!.match).toBe("exact");
+  });
+
+  it("industry words match whole words, ignore punctuation, and flag partial matches", () => {
+    expect(industryInputs(d, "US", "REIT").map((r) => r.industry)).toEqual(["R.E.I.T."]);
+    const banks = industryInputs(d, "US", "Banks");
+    expect(banks.map((r) => r.industry).sort()).toEqual(["Bank (Money Center)", "Banks (Regional)"]);
+    expect(banks.every((r) => r.match === "partial")).toBe(true);
+    expect(industryInputs(d, "US", "Retail (REITs)")[0]!.match).toBe("exact");
   });
 
   it("industry lookup prefers an exact name and explains its US$ assumptions", () => {

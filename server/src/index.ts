@@ -61,6 +61,7 @@ export default {
         disclaimer: DISCLAIMER,
       });
     }
+    // Everything else (including /v1/damodaran.json, routed here by run_worker_first) is not public.
     if (url.pathname !== "/mcp") return new Response("Not found", { status: 404 });
 
     const extra = (env.ALLOWED_ORIGINS ?? "").split(",").map((s) => s.trim()).filter(Boolean);

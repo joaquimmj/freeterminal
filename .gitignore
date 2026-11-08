@@ -6,3 +6,4 @@ node_modules/
 .DS_Store
 server/snapshot/v1/
 server/.snapshot-work/
+server/.damodaran-last/

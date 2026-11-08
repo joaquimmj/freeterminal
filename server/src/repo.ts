@@ -73,7 +73,11 @@ export class Repo {
 
   manifest(): Promise<Manifest | null> {
     if (!manifestMemo || manifestMemo.key !== this.assets) {
-      manifestMemo = { key: this.assets, value: this.asset<Manifest>("/manifest.json").catch(() => null) };
+      const value = this.asset<Manifest>("/manifest.json");
+      manifestMemo = { key: this.assets, value };
+      value.catch(() => {
+        manifestMemo = null;
+      });
     }
     return manifestMemo.value;
   }
@@ -81,7 +85,13 @@ export class Repo {
   /** Damodaran's valuation datasets (built into the snapshot), or null when not deployed. */
   damodaran(): Promise<DamodaranData | null> {
     if (!damodaranMemo || damodaranMemo.key !== this.assets) {
-      damodaranMemo = { key: this.assets, value: this.asset<DamodaranData>("/damodaran.json").catch(() => null) };
+      // asset() maps a 404 (not deployed) to null; any other failure is thrown and NOT memoized,
+      // so one transient error doesn't disable the tool for the isolate's lifetime.
+      const value = this.asset<DamodaranData>("/damodaran.json");
+      damodaranMemo = { key: this.assets, value };
+      value.catch(() => {
+        damodaranMemo = null;
+      });
     }
     return damodaranMemo.value;
   }
