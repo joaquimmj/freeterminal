@@ -87,6 +87,16 @@ describe("risk-free rates", () => {
 describe("cachedFetchText", () => {
   const url = "https://home.treasury.gov/x.csv";
 
+  it("sends a plain product/version User-Agent (Treasury's CDN stalls agents that contain a URL)", async () => {
+    let ua = "";
+    const f = cachedFetchText(async (_u, init) => {
+      ua = new Headers(init?.headers).get("User-Agent") ?? "";
+      return new Response("Date,10 Yr\n");
+    });
+    await f(url, 60);
+    expect(ua).toMatch(/^freeterminal\/\d+\.\d+\.\d+$/);
+  });
+
   it("maps a non-OK upstream to UpstreamError", async () => {
     const f = cachedFetchText(async () => new Response("down", { status: 503 }));
     await expect(f(url, 60)).rejects.toBeInstanceOf(UpstreamError);
@@ -97,6 +107,42 @@ describe("cachedFetchText", () => {
     const f = cachedFetchText(async () => new Response(n++ === 0 ? "<html>maintenance</html>" : "Date,10 Yr\n11/06/2026,4.86\n"));
     await expect(f(url, 60, isTreasuryCsv)).rejects.toThrow(/unexpected page/);
     expect(await f(url, 60, isTreasuryCsv)).toMatch(/^Date,/);
+  });
+
+  /** A Cache stand-in whose writes take time, like a real one (and can be cut off if not awaited). */
+  function slowCache(initial?: string) {
+    const store = new Map<string, string>();
+    if (initial !== undefined) store.set(url, initial);
+    const puts: string[] = [];
+    const cache = {
+      match: async (k: Request) => (store.has(k.url) ? new Response(store.get(k.url)) : undefined),
+      put: async (k: Request, r: Response) => {
+        const body = await r.text();
+        await new Promise((res) => setTimeout(res, 5));
+        store.set(k.url, body);
+        puts.push(body);
+      },
+    } as unknown as Cache;
+    return { cache, store, puts };
+  }
+
+  it("finishes writing the cache before returning (a cut-off write cached an empty body)", async () => {
+    const c = slowCache();
+    const f = cachedFetchText(async () => new Response("Date,10 Yr\n11/06/2026,4.86\n"), c.cache);
+    await f(url, 60, isTreasuryCsv);
+    expect(c.store.get(url)).toBe("Date,10 Yr\n11/06/2026,4.86\n");
+  });
+
+  it("treats an empty cached body as a miss, and never caches an empty body", async () => {
+    const c = slowCache("");
+    let n = 0;
+    const f = cachedFetchText(async () => {
+      n++;
+      return new Response("");
+    }, c.cache);
+    expect(await f(url, 60)).toBe("");
+    expect(n).toBe(1); // the empty cache entry was not trusted
+    expect(c.puts).toEqual([]); // and an empty answer is not stored
   });
 
   it("serves repeat requests from the isolate memo without refetching", async () => {

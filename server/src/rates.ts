@@ -2,7 +2,7 @@
 // - US: Treasury daily par yield curve (home.treasury.gov CSV download)
 // - Euro area: ECB Data Portal yield curves (YC), Svensson par yields; AAA issuers by default
 
-import { PRODUCT_NAME, REPO_URL } from "./config";
+import { PRODUCT_NAME, VERSION } from "./config";
 import { pastDate, shiftDays, staleness, todayIso, ttlFor } from "./dates";
 import { ToolError, UpstreamError } from "./errors";
 import type { FetchLike } from "./sec/edgar";
@@ -206,15 +206,14 @@ const MEMO_MAX = 128;
 
 /**
  * GET with two cache layers: a small per-isolate memo (works even where the
- * Cache API is a no-op, e.g. possibly *.workers.dev) and the Cache API. A body
- * is cached only if `valid(body)` accepts it, so an error page served with a
- * 200 is never stored as data.
+ * Cache API is a no-op, e.g. possibly *.workers.dev) and the Cache API.
+ * - A body is cached only if `valid(body)` accepts it and it is not empty, so an
+ *   error page served with a 200 (or an empty window) is never stored as data.
+ * - The cache write is awaited: a write left running after the response is sent
+ *   can be cut off and leave an EMPTY entry, which then poisons every read.
+ * - An empty cached body is never trusted; it is treated as a miss.
  */
-export function cachedFetchText(
-  fetchImpl: FetchLike,
-  cache?: Cache,
-  waitUntil: (p: Promise<unknown>) => void = (p) => void p.catch(() => undefined),
-): FetchText {
+export function cachedFetchText(fetchImpl: FetchLike, cache?: Cache): FetchText {
   const memo = new Map<string, { expires: number; body: string }>();
   return async (url, ttlSeconds, valid = () => true) => {
     const now = Date.now();
@@ -222,12 +221,11 @@ export function cachedFetchText(
     if (m && m.expires > now) return m.body;
     const key = new Request(url);
     const hit = await cache?.match(key).catch(() => undefined);
-    let body: string;
-    if (hit) {
-      body = await hit.text();
-    } else {
+    let body = hit ? await hit.text().catch(() => "") : "";
+    if (!hit || !body.trim()) {
       const res = await fetchImpl(url, {
-        headers: { Accept: "text/csv,*/*", "User-Agent": `${PRODUCT_NAME} (+${REPO_URL})` },
+        // No URL in the agent: home.treasury.gov's CDN stalls user agents that contain one (measured).
+        headers: { Accept: "text/csv,*/*", "User-Agent": `${PRODUCT_NAME}/${VERSION}` },
         signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
       }).catch((e) => {
         throw new UpstreamError(`${new URL(url).host} did not answer (${(e as Error).name})`);
@@ -235,13 +233,16 @@ export function cachedFetchText(
       if (!res.ok) throw new UpstreamError(`${new URL(url).host} returned HTTP ${res.status}`, res.status);
       body = await res.text();
       if (!valid(body)) throw new UpstreamError(`${new URL(url).host} returned an unexpected page instead of data`);
-      if (cache) {
-        const put = cache.put(key, new Response(body, { headers: { "Cache-Control": `public, max-age=${ttlSeconds}` } }));
-        waitUntil(put.catch(() => undefined));
+      if (cache && body.trim()) {
+        await cache
+          .put(key, new Response(body, { headers: { "Cache-Control": `public, max-age=${ttlSeconds}` } }))
+          .catch(() => undefined);
       }
     }
-    if (memo.size >= MEMO_MAX) memo.delete(memo.keys().next().value!);
-    memo.set(url, { expires: now + Math.min(ttlSeconds, 3600) * 1000, body });
+    if (body.trim()) {
+      if (memo.size >= MEMO_MAX) memo.delete(memo.keys().next().value!);
+      memo.set(url, { expires: now + Math.min(ttlSeconds, 3600) * 1000, body });
+    }
     return body;
   };
 }
