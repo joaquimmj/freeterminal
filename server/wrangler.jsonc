@@ -1,0 +1,21 @@
+// Cloudflare Worker config. Free plan only (CLAUDE.md rule 3).
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "freeterminal",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // Nightly SEC snapshot (scripts/build-snapshot.ts). Served before the Worker runs: free, no CPU.
+  "assets": { "directory": "./snapshot", "binding": "ASSETS" },
+  "workers_dev": true,
+  "observability": { "enabled": true },
+  "vars": {
+    // SEC fair-access policy: "<app name> <contact email>". Set your own before deploying.
+    "SEC_USER_AGENT": "",
+    "DAILY_CAP": "90000",
+    "PER_IP_PER_MINUTE": "60"
+  }
+  // Optional global daily counter. Create it with `npx wrangler d1 create freeterminal-usage`,
+  // apply migrations/0001_usage.sql, then add:
+  // "d1_databases": [{ "binding": "USAGE", "database_name": "freeterminal-usage", "database_id": "<id>" }]
+}
