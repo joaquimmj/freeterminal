@@ -14,6 +14,9 @@ for (const mode of ["auto", "legacy"] as const) {
   for (const [name, args] of [
     ["company_lookup", { query: "apple" }],
     ["financial_statements", { ticker: "AAPL", years: 2 }],
+    ["key_metrics", { ticker: "AAPL", years: 3 }],
+    ["risk_free_rate", { region: "US", tenor: "10Y" }],
+    ["risk_free_rate", { region: "EUR", tenor: "10Y" }],
     ["data_status", {}],
   ] as const) {
     const t0 = Date.now();

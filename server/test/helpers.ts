@@ -42,6 +42,14 @@ export function tickerToCik(): Map<string, number> {
   return new Map(t.data.map((r) => [String(r[iT]), Number(r[iC])]));
 }
 
+/** Rate fixture for a Treasury/ECB URL (latest observations as of 2026-11-08). */
+function rateFixture(url: string): string | null {
+  if (url.includes("daily-treasury-rates.csv/") && !url.includes("/2025/")) return "treasury_2026.csv";
+  if (url.includes("daily-treasury-rates.csv/2025/")) return "treasury_2025.csv";
+  if (url.includes("data-api.ecb.europa.eu") && url.includes("PY_10Y?lastNObservations=1")) return "ecb_PY_10Y_latest.csv";
+  return null;
+}
+
 /** A fetch stub serving SEC fixture files, like open-finance-mcp's respx router. */
 export function secFetch(calls: string[] = []) {
   const byCik = new Map([...tickerToCik()].map(([t, c]) => [c, t]));
@@ -65,6 +73,8 @@ export function secFetch(calls: string[] = []) {
       return Response.json(load("efts_exxon_mobil.json"));
     }
     if (url.startsWith("https://efts.sec.gov/")) return Response.json({ hits: { hits: [] } });
+    const rate = rateFixture(url);
+    if (rate) return new Response(readFileSync(join(import.meta.dirname, "fixtures", "rates", rate), "utf8"));
     return new Response("unexpected", { status: 500 });
   };
 }
