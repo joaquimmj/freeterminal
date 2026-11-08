@@ -3,6 +3,7 @@
 
 import { DISCLAIMER } from "./config";
 import { isFinancial, stalenessWarning } from "./sec/filings";
+import type { EuRecord } from "./esef/record";
 import type { CompanyRecord } from "./sec/record";
 import type { Cell, Column, Derived, Standardized } from "./sec/xbrl";
 
@@ -160,6 +161,77 @@ export function financialStatements(rec: CompanyRecord, years: number, includeLt
       `diluted_eps in ${cur} per share.`,
     periods: columns.map(shapeColumn),
     warnings,
+    notes: std.notes,
+    sources,
+    data_as_of: rec.built_at,
+    disclaimer: DISCLAIMER,
+  };
+}
+
+// ---- European issuers (ESEF) ------------------------------------------------------
+
+const ESEF_LICENSE =
+  "ESEF report filed under the EU Transparency Directive, via filings.xbrl.org (XBRL International); " +
+  "the repository states no restrictions on use. Cite the report.";
+
+export function euSourcesFor(rec: EuRecord, cited: Set<string>): Source[] {
+  const std = rec.financials!;
+  return [...cited].sort().map((a) => {
+    const f = rec.filings[a];
+    return {
+      name: `${rec.name}, ESEF ${f?.kind === "half-year" ? "half-year" : "annual financial"} report (filings.xbrl.org)`,
+      url: std.filings[a]?.url ?? "",
+      accession_or_id: a,
+      form: f?.kind === "half-year" ? "ESEF half-year report" : "ESEF annual report",
+      period: f?.report_end ?? null,
+      as_of: (f?.published ?? f?.processed ?? "").slice(0, 10) || null,
+      license_note: ESEF_LICENSE,
+    };
+  });
+}
+
+export function euCompanyBlock(rec: EuRecord) {
+  const std = rec.financials!;
+  const lastAnnual = std.periods.filter((p) => p.type === "annual").at(-1);
+  return {
+    name: std.entity_name ?? rec.name,
+    ticker: null,
+    lei: rec.lei,
+    country: rec.country,
+    region: "EU",
+    reporting_standard: "IFRS",
+    currency: std.currency,
+    fiscal_year_end: lastAnnual ? lastAnnual.end.slice(5).replace("-", "") : null,
+    financial_company: rec.financial,
+  };
+}
+
+export function euWarnings(rec: EuRecord): string[] {
+  return rec.financial
+    ? ["financial_company (bank or insurer): EBITDA, net debt and EV multiples are not meaningful; use P/E and P/B."]
+    : [];
+}
+
+export function euFinancialStatements(rec: EuRecord, years: number, includeLtm: boolean) {
+  const std = rec.financials!;
+  const { columns, cited } = slice(std, years, includeLtm);
+  const sources = euSourcesFor(rec, cited);
+  const cur = std.currency;
+  const last = columns.filter((c) => c.type === "annual").at(-1);
+  const summary =
+    `${std.entity_name ?? rec.name} (LEI ${rec.lei}, ${rec.country}), IFRS, ${cur}. ` +
+    (last
+      ? `${last.label} (ended ${last.end}): revenue ${fmt(last.values.revenue?.value, cur)}, ` +
+        `net income ${fmt(last.values.net_income?.value, cur)}. `
+      : "") +
+    `${columns.length} period(s), ${sources.length} cited ESEF report(s). Every value cites its IFRS concept and report; ` +
+    "cite the matching `sources` entry when you use a number.";
+  return {
+    summary,
+    company: euCompanyBlock(rec),
+    units: `Monetary values in ${cur}, absolute (not thousands or millions). diluted_eps in ${cur} per share.`,
+    periods: columns.map(shapeColumn),
+    warnings: euWarnings(rec),
     notes: std.notes,
     sources,
     data_as_of: rec.built_at,

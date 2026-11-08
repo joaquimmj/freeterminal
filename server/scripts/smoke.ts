@@ -21,6 +21,9 @@ for (const mode of ["auto", "legacy"] as const) {
     ["fx_rate", { from: "JPY", to: "USD", average_from: "2025-04-01", average_to: "2026-03-31" }],
     ["valuation_inputs", { country: "UK", industry: "REIT", region: "US" }],
     ["fx_rate", { from: "EUR", to: "USD", average_from: "1999-01-04", average_to: "2026-11-06" }],
+    ["company_lookup", { query: "TotalEnergies" }],
+    ["financial_statements", { ticker: "529900S21EQ1BO4ESM68", years: 3 }],
+    ["key_metrics", { ticker: "724500Y6DUVHQD6OXN27", years: 2 }],
     ["data_status", {}],
   ] as const) {
     const t0 = Date.now();

@@ -13,6 +13,7 @@ import { resetMemos } from "../src/repo";
 import { pad } from "../src/sec/edgar";
 import { buildCompanyRecord } from "../src/sec/record";
 import { syntheticDamodaran } from "./damodaran-fixture";
+import { TTE, tteRecord } from "./esef-fixture";
 import { facts, load, secFetch, submissions, tickerToCik } from "./helpers";
 
 const UA = "freeterminal-tests test@example.com";
@@ -66,6 +67,9 @@ function fixtureAssets(tickers: string[]) {
   const t = load<{ fields: string[]; data: unknown[][] }>("company_tickers_exchange.json");
   files.set("/v1/companies.json", t);
   files.set("/v1/damodaran.json", syntheticDamodaran());
+  files.set("/v1/eu/companies.json", { fields: ["lei", "name", "country", "currency", "fiscal_year_end"], data: [[TTE.lei, TTE.name, "FR", "USD", "1231"]] });
+  files.set("/v1/eu/manifest.json", { built_at: "2026-11-08T04:00:00Z" });
+  files.set(`/v1/eu/co/${TTE.lei}.json`, tteRecord());
   files.set("/v1/manifest.json", { schema: 1, built_at: "2026-11-08T03:00:00Z", companies: t.data.length, records: tickers.length, source: "fixtures" });
   for (const tk of tickers) {
     const cik = t2c.get(tk)!;
@@ -191,6 +195,33 @@ describe("M2 tools", () => {
     const eur = await call(baseEnv(), "risk_free_rate", { region: "EUR" });
     expect(eur.json.tenor).toBe("10Y");
     expect(eur.json.sources[0].license_note).toMatch(/ECB statistics/);
+  });
+});
+
+describe("European issuers (ESEF)", () => {
+  it("company_lookup finds an EU issuer by name and returns its LEI", async () => {
+    const r = await call(baseEnv({ ASSETS: fixtureAssets(["AAPL"]) }), "company_lookup", { query: "totalenergies" });
+    expect(r.json.results[0]).toMatchObject({ lei: TTE.lei, region: "EU", reporting_standard: "IFRS", currency: "USD" });
+  });
+
+  it("financial_statements and key_metrics accept the LEI, with ESEF citations and no SEC calls", async () => {
+    const env = baseEnv({ ASSETS: fixtureAssets(["AAPL"]) });
+    const fs = await call(env, "financial_statements", { ticker: TTE.lei, years: 2 });
+    expect(fs.isError).toBe(false);
+    expect(fs.json.company).toMatchObject({ lei: TTE.lei, region: "EU", country: "FR", currency: "USD" });
+    expect(fs.json.periods.at(-1).income_statement.revenue.value).toBe(201_196_000_000);
+    expect(fs.json.sources[0]).toMatchObject({ form: "ESEF annual report", url: expect.stringContaining("https://filings.xbrl.org/") });
+    expect(fs.json.data_as_of).toBe("2026-11-08T04:00:00Z");
+    const km = await call(env, "key_metrics", { ticker: TTE.lei, years: 2 });
+    expect(km.json.periods.at(-1).metrics.net_margin.formula).toBe("net_income / revenue");
+    expect(km.json.sources[0].license_note).toMatch(/filings\.xbrl\.org/);
+    expect(calls.filter((u) => u.includes("sec.gov"))).toEqual([]);
+  });
+
+  it("an LEI outside the coverage gets an explanation, not a guess", async () => {
+    const r = await call(baseEnv({ ASSETS: fixtureAssets(["AAPL"]) }), "financial_statements", { ticker: "529900ZZZZZZZZZZZZ42" });
+    expect(r.isError).toBe(true);
+    expect(r.text).toMatch(/not in the European coverage/);
   });
 });
 

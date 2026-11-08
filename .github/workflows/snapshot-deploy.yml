@@ -84,6 +84,44 @@ jobs:
             echo "::warning::Damodaran build failed and no cached copy exists; valuation_inputs will be unavailable."
             echo "Damodaran build failed and no cached copy exists: valuation_inputs is unavailable until the next good build." >> "$GITHUB_STEP_SUMMARY"
           fi
+      # European issuers from ESEF reports. Extractions are cached per filing (reports never change),
+      # so a night only downloads new reports. Like Damodaran, a failure falls back to the last good copy.
+      - if: steps.cfg.outputs.ok == 'true'
+        name: Restore ESEF extraction cache and last good EU snapshot
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            server/.esef-cache
+            server/.esef-last
+          key: esef-${{ github.run_id }}
+          restore-keys: esef-
+      - if: steps.cfg.outputs.ok == 'true'
+        id: esef
+        name: Build European issuers (ESEF, filings.xbrl.org)
+        continue-on-error: true
+        timeout-minutes: 30
+        run: |
+          npx tsx scripts/build-esef.ts
+          rm -rf .esef-last && cp -R snapshot/v1/eu .esef-last
+      - if: steps.cfg.outputs.ok == 'true' && always()
+        name: Save ESEF cache
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            server/.esef-cache
+            server/.esef-last
+          key: esef-${{ github.run_id }}
+      - if: steps.cfg.outputs.ok == 'true' && steps.esef.outcome != 'success'
+        name: Fall back to the last good EU snapshot
+        run: |
+          if [ -d .esef-last ]; then
+            rm -rf snapshot/v1/eu && cp -R .esef-last snapshot/v1/eu
+            echo "::warning::ESEF build failed; deploying the last good EU snapshot."
+            echo "ESEF build failed tonight; EU issuers serve the last good snapshot." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::ESEF build failed and no cached EU snapshot exists; EU issuers unavailable."
+            echo "ESEF build failed and no cached copy exists: EU issuers are unavailable until the next good build." >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: Deploy to workers.dev
         if: ${{ steps.cfg.outputs.ok == 'true' && env.HAS_CF == 'true' }}
         env:

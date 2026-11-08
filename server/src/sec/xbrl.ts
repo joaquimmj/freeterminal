@@ -74,7 +74,7 @@ export const INSTANT_CONCEPTS: Record<string, string[]> = {
 };
 
 export const IFRS_DURATION_CONCEPTS: Record<string, string[]> = {
-  revenue: ["Revenue", "RevenueFromContractsWithCustomers"],
+  revenue: ["Revenue", "RevenueFromContractsWithCustomers", "RevenueFromSaleOfGoods"],
   gross_profit: ["GrossProfit"],
   operating_income: ["ProfitLossFromOperatingActivities"],
   pretax_income: ["ProfitLossBeforeTax"],
@@ -105,10 +105,14 @@ export const IFRS_INSTANT_CONCEPTS: Record<string, string[]> = {
     "CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings",
     "CurrentLoansReceivedAndCurrentPortionOfNoncurrentLoansReceived",
   ],
+  // The two components of current borrowings, used only when the total above is not tagged.
+  short_term_borrowings: ["ShorttermBorrowings"],
+  current_portion_of_longterm_borrowings: ["CurrentPortionOfLongtermBorrowings"],
 };
 
-export const ANNUAL_FORMS = new Set(["10-K", "10-K/A", "10-KT", "20-F", "20-F/A", "40-F", "40-F/A"]);
-export const QUARTERLY_FORMS = new Set(["10-Q", "10-Q/A"]); // 6-K interims carry no XBRL financials
+// "ESEF" / "ESEF-HY": European annual and half-year reports (src/esef/extract.ts).
+export const ANNUAL_FORMS = new Set(["10-K", "10-K/A", "10-KT", "20-F", "20-F/A", "40-F", "40-F/A", "ESEF"]);
+export const QUARTERLY_FORMS = new Set(["10-Q", "10-Q/A", "ESEF-HY"]); // 6-K interims carry no XBRL financials
 
 /** The filer has no usable annual facts in either taxonomy (new registrant, fund...). */
 export class NoAnnualFacts extends Error {
@@ -398,16 +402,30 @@ export function totalDebt(inst: Inst): [number | null, string] {
   return [(lt ?? 0) + (cur ?? 0), formula];
 }
 
-/** IFRS Borrowings (current + non-current), else its two parts. Leases excluded. */
+/**
+ * IFRS Borrowings (current + non-current), else its parts. Current borrowings come
+ * from their total concept, else from its two components (short-term borrowings +
+ * current portion of long-term borrowings), never both. Leases excluded.
+ */
 export function ifrsTotalDebt(inst: Inst): [number | null, string] {
   if (inst.borrowings) return [inst.borrowings.value, "borrowings"];
-  const parts = ["borrowings_noncurrent", "borrowings_current"].filter((k) => inst[k]);
-  if (!parts.length) return [null, "no debt concepts reported"];
-  let formula = parts.join(" + ");
-  if (!parts.includes("borrowings_noncurrent")) {
-    formula += " (no non-current borrowings concept reported: likely incomplete)";
+  let cur: number | null = null;
+  let curDesc: string | null = null;
+  if (inst.borrowings_current) {
+    cur = inst.borrowings_current.value;
+    curDesc = "borrowings_current";
+  } else {
+    const parts = ["short_term_borrowings", "current_portion_of_longterm_borrowings"].filter((k) => inst[k]);
+    if (parts.length) {
+      cur = sumCells(parts.map((k) => inst[k]));
+      curDesc = parts.length > 1 ? `(${parts.join(" + ")})` : parts[0]!;
+    }
   }
-  return [sumCells(parts.map((k) => inst[k])), formula];
+  const lt = inst.borrowings_noncurrent?.value ?? null;
+  if (lt === null && cur === null) return [null, "no debt concepts reported"];
+  let formula = [lt !== null ? "borrowings_noncurrent" : null, curDesc].filter(Boolean).join(" + ");
+  if (lt === null) formula += " (no non-current borrowings concept reported: likely incomplete)";
+  return [(lt ?? 0) + (cur ?? 0), formula];
 }
 
 function derive(row: Record<string, Cell | null>, inst: Record<string, Cell | null>, tx: Taxonomy): Record<string, Derived | null> {
@@ -584,9 +602,17 @@ function filingIndex(ns: Namespace): Map<string, { form: string | null; filed: s
   return idx;
 }
 
+export interface StandardizeOptions {
+  /** Where the facts come from: SEC companyfacts (default) or ESEF reports. Changes notes and citation URLs. */
+  source?: "sec" | "esef";
+  /** Citation URL for an accession / filing id (default: the SEC EDGAR filing index). */
+  filingUrl?: (accession: string) => string;
+}
+
 /** Standardized annual (+ optional LTM) financials with per-value citations. */
-export function standardize(cf: CompanyFacts, years = 5, includeLtm = true): Standardized {
+export function standardize(cf: CompanyFacts, years = 5, includeLtm = true, opts: StandardizeOptions = {}): Standardized {
   const cik = Math.trunc(Number(cf.cik));
+  const urlFor = opts.filingUrl ?? ((a: string) => filingUrl(cik, a));
   const [ctx, allPeriods] = choose(cf);
   const periods = allPeriods.slice(-years);
   const columns: Column[] = [];
@@ -620,7 +646,15 @@ export function standardize(cf: CompanyFacts, years = 5, includeLtm = true): Sta
     "Derived metrics show their formula. EBITDA is null when operating income is not " +
       "reported (common for banks and insurers, where EBITDA is not meaningful).",
   ];
-  if (ctx.tx === IFRS) {
+  if (opts.source === "esef") {
+    notes.push(
+      "ESEF report (IFRS as adopted in the EU), from the issuer's tagged consolidated statements. Lines the " +
+        "issuer tagged only with its own (extension) concepts are not mapped and come back null.",
+    );
+    if (!columns.some((c) => c.type === "ltm")) {
+      notes.push("No LTM column: the issuer's half-year report is not available in ESEF format.");
+    }
+  } else if (ctx.tx === IFRS) {
     notes.push(
       "IFRS filer (20-F/40-F): figures follow IFRS, not US GAAP. Interim results are furnished " +
         "on 6-K without XBRL, so there is no LTM column.",
@@ -630,7 +664,7 @@ export function standardize(cf: CompanyFacts, years = 5, includeLtm = true): Sta
   const filings: Record<string, FilingRef> = {};
   for (const a of [...accessions].sort()) {
     const meta = idx.get(a);
-    filings[a] = { url: filingUrl(cik, a), form: meta?.form ?? null, filed: meta?.filed ?? null };
+    filings[a] = { url: urlFor(a), form: meta?.form ?? null, filed: meta?.filed ?? null };
   }
   return {
     cik,

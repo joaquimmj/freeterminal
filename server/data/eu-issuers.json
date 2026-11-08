@@ -1,0 +1,164 @@
+{
+ "note": "Issuers whose ESEF annual reports are built into the snapshot. Add a line with the LEI (gleif.org) to cover another issuer; it must have filings on filings.xbrl.org.",
+ "issuers": [
+  {
+   "lei": "5493008H3828EMEXB082",
+   "name": "ANHEUSER-BUSCH INBEV",
+   "country": "BE"
+  },
+  {
+   "lei": "5493006QMFDDMYWIAM13",
+   "name": "BANCO SANTANDER S.A.",
+   "country": "ES",
+   "financial": true
+  },
+  {
+   "lei": "5QK37QC7NWOJ8D7WVQ45",
+   "name": "IBERDROLA SA",
+   "country": "ES"
+  },
+  {
+   "lei": "549300TTCXZOGZM2EY83",
+   "name": "INDUSTRIA DE DISEÑO TEXTIL, S.A.",
+   "country": "ES"
+  },
+  {
+   "lei": "2138001CNF45JP5XZK38",
+   "name": "KONE OYJ",
+   "country": "FI"
+  },
+  {
+   "lei": "549300A0JPRWG1KI7U06",
+   "name": "Nokia Oyj",
+   "country": "FI"
+  },
+  {
+   "lei": "529900ODI3047E2LIV03",
+   "name": "Nordea Bank Abp",
+   "country": "FI",
+   "financial": true
+  },
+  {
+   "lei": "F5WCUMTUM4RKZ1MAIE39",
+   "name": "AXA",
+   "country": "FR",
+   "financial": true
+  },
+  {
+   "lei": "549300B8P6MUJ1YWTS08",
+   "name": "CARREFOUR",
+   "country": "FR"
+  },
+  {
+   "lei": "969500KMUQ2B6CBAF162",
+   "name": "DANONE",
+   "country": "FR"
+  },
+  {
+   "lei": "549300M3VH1A3ER1TB49",
+   "name": "ESSILORLUXOTTICA",
+   "country": "FR"
+  },
+  {
+   "lei": "969500Y4IJGHJE2MTJ13",
+   "name": "HERMES INTERNATIONAL",
+   "country": "FR"
+  },
+  {
+   "lei": "549300VGEJKB7SVUZR78",
+   "name": "KERING",
+   "country": "FR"
+  },
+  {
+   "lei": "969500MMPQVHK671GT54",
+   "name": "L'AIR LIQUIDE SOCIETE ANONYME POUR L'ETUDE ET L'EXPLOITATION DES PROCEDES GEORGES CLAUDE",
+   "country": "FR"
+  },
+  {
+   "lei": "529900JI1GG6F7RKVI53",
+   "name": "L'OREAL",
+   "country": "FR"
+  },
+  {
+   "lei": "IOG4E947OATN0KJYSD45",
+   "name": "LVMH MOET HENNESSY LOUIS VUITTON",
+   "country": "FR"
+  },
+  {
+   "lei": "52990097YFPX9J0H5D87",
+   "name": "PERNOD RICARD",
+   "country": "FR"
+  },
+  {
+   "lei": "549300E9PC51EN656011",
+   "name": "SANOFI",
+   "country": "FR"
+  },
+  {
+   "lei": "969500A1YF1XUYYXS284",
+   "name": "SCHNEIDER ELECTRIC SE",
+   "country": "FR"
+  },
+  {
+   "lei": "529900S21EQ1BO4ESM68",
+   "name": "TotalEnergies SE",
+   "country": "FR"
+  },
+  {
+   "lei": "213800WFQ334R8UXUG83",
+   "name": "VINCI",
+   "country": "FR"
+  },
+  {
+   "lei": "BUCRF72VH5RBN7X3VL35",
+   "name": "ENI S.P.A.",
+   "country": "IT"
+  },
+  {
+   "lei": "MINO79WLOO247M1IL051",
+   "name": "AIRBUS SE",
+   "country": "NL"
+  },
+  {
+   "lei": "724500Y6DUVHQD6OXN27",
+   "name": "ASML Holding N.V.",
+   "country": "NL"
+  },
+  {
+   "lei": "724500973ODKK3IFQ447",
+   "name": "Adyen N.V.",
+   "country": "NL"
+  },
+  {
+   "lei": "549300RIVY5EX8RCON76",
+   "name": "FERRARI N.V.",
+   "country": "NL"
+  },
+  {
+   "lei": "549300NYKK9MWM7GGW15",
+   "name": "ING GROEP N.V.",
+   "country": "NL",
+   "financial": true
+  },
+  {
+   "lei": "724500C9GNBV20UYRX36",
+   "name": "Koninklijke Ahold Delhaize N.V.",
+   "country": "NL"
+  },
+  {
+   "lei": "635400Z5LQ5F9OLVT688",
+   "name": "Prosus N.V.",
+   "country": "NL"
+  },
+  {
+   "lei": "549300LKT9PW7ZIBDF31",
+   "name": "STELLANTIS N.V.",
+   "country": "NL"
+  },
+  {
+   "lei": "724500TEM53I0U077B74",
+   "name": "Wolters Kluwer N.V.",
+   "country": "NL"
+  }
+ ]
+}
