@@ -1,6 +1,6 @@
 {
   "name": "freeterminal-server",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Free, citable financial data for Claude: remote MCP server on Cloudflare Workers",
   "scripts": {
     "dev": "wrangler dev",
@@ -9,7 +9,8 @@
     "typecheck": "tsc --noEmit",
     "snapshot": "tsx scripts/build-snapshot.ts",
     "snapshot:dev": "tsx scripts/build-snapshot.ts --tickers AAPL,MSFT,JPM,KO,CAT,GOOGL,SAP,TM",
-    "check": "npm run typecheck && npm test && tsx scripts/build-snapshot.ts --fixtures test/fixtures/sec && wrangler deploy --dry-run --outdir .wrangler/dry-run"
+    "check": "npm run typecheck && npm test && tsx scripts/build-snapshot.ts --fixtures test/fixtures/sec && wrangler deploy --dry-run --outdir .wrangler/dry-run",
+    "damodaran": "tsx scripts/build-damodaran.ts"
   },
   "license": "MIT",
   "type": "module",
@@ -26,6 +27,7 @@
     "typescript": "^7.0.2",
     "vitest": "^5.1.0",
     "wrangler": "^4.158.0",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "yauzl": "^3.4.0"
   },
   "allowScripts": {

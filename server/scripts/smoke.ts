@@ -14,6 +14,13 @@ for (const mode of ["auto", "legacy"] as const) {
   for (const [name, args] of [
     ["company_lookup", { query: "apple" }],
     ["financial_statements", { ticker: "AAPL", years: 2 }],
+    ["key_metrics", { ticker: "AAPL", years: 3 }],
+    ["risk_free_rate", { region: "US", tenor: "10Y" }],
+    ["risk_free_rate", { region: "EUR", tenor: "10Y" }],
+    ["fx_rate", { from: "EUR", to: "USD" }],
+    ["fx_rate", { from: "JPY", to: "USD", average_from: "2025-04-01", average_to: "2026-03-31" }],
+    ["valuation_inputs", { country: "UK", industry: "REIT", region: "US" }],
+    ["fx_rate", { from: "EUR", to: "USD", average_from: "1999-01-04", average_to: "2026-11-06" }],
     ["data_status", {}],
   ] as const) {
     const t0 = Date.now();

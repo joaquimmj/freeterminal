@@ -51,6 +51,39 @@ jobs:
         run: |
           NODE_OPTIONS=--max-old-space-size=6144 npx tsx scripts/build-snapshot.ts --bulk --work "$RUNNER_TEMP/sec"
           du -sh snapshot/v1; ls snapshot/v1/co | wc -l
+      # Damodaran's site being down, or a new layout that fails validation, must not block the
+      # SEC deploy: keep the last good damodaran.json in the Actions cache and fall back to it.
+      - if: steps.cfg.outputs.ok == 'true'
+        name: Restore last good Damodaran inputs
+        uses: actions/cache/restore@v4
+        with:
+          path: server/.damodaran-last
+          key: damodaran-${{ github.run_id }}
+          restore-keys: damodaran-
+      - if: steps.cfg.outputs.ok == 'true'
+        id: damodaran
+        name: Build Damodaran valuation inputs (about 1.5 MB download)
+        continue-on-error: true
+        run: |
+          npx tsx scripts/build-damodaran.ts
+          mkdir -p .damodaran-last && cp snapshot/v1/damodaran.json .damodaran-last/damodaran.json
+      - if: steps.cfg.outputs.ok == 'true' && steps.damodaran.outcome == 'success'
+        name: Save Damodaran inputs as the last good copy
+        uses: actions/cache/save@v4
+        with:
+          path: server/.damodaran-last
+          key: damodaran-${{ github.run_id }}
+      - if: steps.cfg.outputs.ok == 'true' && steps.damodaran.outcome != 'success'
+        name: Fall back to the last good Damodaran inputs
+        run: |
+          if [ -f .damodaran-last/damodaran.json ]; then
+            cp .damodaran-last/damodaran.json snapshot/v1/damodaran.json
+            echo "::warning::Damodaran build failed; deploying the last good damodaran.json from cache."
+            echo "Damodaran build failed tonight; valuation_inputs serves the last good copy." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::Damodaran build failed and no cached copy exists; valuation_inputs will be unavailable."
+            echo "Damodaran build failed and no cached copy exists: valuation_inputs is unavailable until the next good build." >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: Deploy to workers.dev
         if: ${{ steps.cfg.outputs.ok == 'true' && env.HAS_CF == 'true' }}
         env:

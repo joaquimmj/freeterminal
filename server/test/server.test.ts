@@ -3,6 +3,8 @@
 // (c) 2026 Nathanael Johnson, MIT License (tests/test_server.py @ 8bcf3af0).
 
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/config";
 import { resetCounter } from "../src/guard";
@@ -10,6 +12,7 @@ import worker from "../src/index";
 import { resetMemos } from "../src/repo";
 import { pad } from "../src/sec/edgar";
 import { buildCompanyRecord } from "../src/sec/record";
+import { syntheticDamodaran } from "./damodaran-fixture";
 import { facts, load, secFetch, submissions, tickerToCik } from "./helpers";
 
 const UA = "freeterminal-tests test@example.com";
@@ -22,8 +25,13 @@ beforeEach(() => {
   resetMemos();
   resetCounter();
   vi.stubGlobal("fetch", secFetch(calls));
+  // Rate and FX fixtures are as of 2026-11-08; freeze the calendar there (timers stay real).
+  vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-11-08T12:00:00Z") });
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 const baseEnv = (over: Partial<Env> = {}): Env => ({ SEC_USER_AGENT: UA, ...over });
 
@@ -57,6 +65,7 @@ function fixtureAssets(tickers: string[]) {
   const files = new Map<string, unknown>();
   const t = load<{ fields: string[]; data: unknown[][] }>("company_tickers_exchange.json");
   files.set("/v1/companies.json", t);
+  files.set("/v1/damodaran.json", syntheticDamodaran());
   files.set("/v1/manifest.json", { schema: 1, built_at: "2026-11-08T03:00:00Z", companies: t.data.length, records: tickers.length, source: "fixtures" });
   for (const tk of tickers) {
     const cik = t2c.get(tk)!;
@@ -75,7 +84,7 @@ describe("tools (live SEC path)", () => {
     for (const mode of ["auto", "legacy"] as const) {
       const client = await connect(baseEnv(), mode);
       const { tools } = await client.listTools();
-      expect(new Set(tools.map((t) => t.name))).toEqual(new Set(["company_lookup", "financial_statements", "data_status"]));
+      expect(new Set(tools.map((t) => t.name))).toEqual(new Set(["company_lookup", "financial_statements", "key_metrics", "risk_free_rate", "fx_rate", "valuation_inputs", "data_status"]));
       expect(tools.every((t) => t.annotations?.readOnlyHint)).toBe(true);
       await client.close();
     }
@@ -163,6 +172,72 @@ describe("tools (live SEC path)", () => {
   });
 });
 
+describe("M2 tools", () => {
+  it("key_metrics returns computed ratios with formulas and sources", async () => {
+    const r = await call(baseEnv({ ASSETS: fixtureAssets(["AAPL"]) }), "key_metrics", { ticker: "AAPL", years: 2 });
+    expect(r.isError).toBe(false);
+    expect(r.json.computed).toBe(true);
+    const fy = r.json.periods.find((p: { type: string }) => p.type === "annual");
+    expect(fy.metrics.gross_margin.formula).toBe("gross_profit / revenue");
+    expect(fy.metrics.gross_margin.value).toBeGreaterThan(0.3);
+    expect(r.json.sources.length).toBeGreaterThan(0);
+    expect(calls).toEqual([]);
+  });
+
+  it("risk_free_rate answers for US and EUR with a cited source", async () => {
+    const us = await call(baseEnv(), "risk_free_rate", { region: "US", tenor: "10Y" });
+    expect([us.json.rate_pct, us.json.rate_decimal, us.json.date]).toEqual([4.86, 0.0486, "2026-11-06"]);
+    expect(us.json.sources[0].name).toMatch(/Treasury/);
+    const eur = await call(baseEnv(), "risk_free_rate", { region: "EUR" });
+    expect(eur.json.tenor).toBe("10Y");
+    expect(eur.json.sources[0].license_note).toMatch(/ECB statistics/);
+  });
+});
+
+describe("valuation and FX tools", () => {
+  it("fx_rate converts through ECB reference rates", async () => {
+    const r = await call(baseEnv(), "fx_rate", { from: "EUR", to: "USD" });
+    expect(r.json.rate).toBe(1.1165);
+    expect(r.json.summary).toMatch(/^1 EUR = 1\.11650 USD/);
+  });
+
+  it("valuation_inputs returns country ERP and industry betas with attribution", async () => {
+    const env = baseEnv({ ASSETS: fixtureAssets(["AAPL"]) });
+    const r = await call(env, "valuation_inputs", { country: "France", industry: "Software", region: "Europe" });
+    expect(r.isError).toBe(false);
+    expect(r.json.country[0].equity_risk_premium).toBe(0.0501);
+    expect(r.json.industry[0].industry).toBe("Software (System & Application)");
+    expect(r.json.attribution).toMatch(/Damodaran/);
+    const list = await call(env, "valuation_inputs", {});
+    expect(list.json.industries).toContain("Advertising");
+  });
+
+  it("a transient asset failure is not remembered as 'not deployed'", async () => {
+    let n = 0;
+    const good = fixtureAssets(["AAPL"]);
+    const flaky = {
+      fetch: async (input: Request | string) => {
+        const path = new URL(typeof input === "string" ? input : input.url).pathname;
+        if (path === "/v1/damodaran.json" && n++ === 0) return new Response("boom", { status: 503 });
+        return good.fetch(input);
+      },
+    };
+    const env = baseEnv({ ASSETS: flaky });
+    const first = await call(env, "valuation_inputs", { country: "France" });
+    expect(first.isError).toBe(true);
+    expect(first.text).toMatch(/Upstream data source failed/);
+    const second = await call(env, "valuation_inputs", { country: "France" });
+    expect(second.isError).toBe(false);
+    expect(second.json.country[0].country).toBe("France");
+  });
+
+  it("valuation_inputs explains itself when the datasets are not deployed", async () => {
+    const r = await call(baseEnv(), "valuation_inputs", { country: "France" });
+    expect(r.isError).toBe(true);
+    expect(r.text).toMatch(/not loaded/);
+  });
+});
+
 describe("snapshot path", () => {
   it("serves from static assets with zero SEC calls, same numbers as live", async () => {
     const live = await call(baseEnv(), "financial_statements", { ticker: "AAPL", years: 3 });
@@ -239,6 +314,16 @@ describe("guardrails", () => {
       ctx,
     );
     expect(res.status).toBe(403);
+  });
+
+  it("does not serve the Damodaran dataset as a public download", async () => {
+    // In production Cloudflare serves assets BEFORE the Worker, so the guard is the config:
+    // the path must be routed to the Worker (run_worker_first), which answers 404.
+    const cfg = readFileSync(join(import.meta.dirname, "..", "wrangler.jsonc"), "utf8");
+    const runFirst = /"run_worker_first"\s*:\s*(\[[^\]]*\])/.exec(cfg);
+    expect(runFirst && JSON.parse(runFirst[1]!)).toContain("/v1/damodaran.json");
+    const res = await worker.fetch(new Request("https://ft.test/v1/damodaran.json"), baseEnv({ ASSETS: fixtureAssets(["AAPL"]) }), ctx);
+    expect(res.status).toBe(404);
   });
 
   it("serves a small landing JSON at /", async () => {

@@ -5,6 +5,8 @@
 import { createMcpHandler, originValidationResponse } from "@modelcontextprotocol/server";
 import { DISCLAIMER, PRODUCT_NAME, REPO_URL, VERSION, type Env } from "./config";
 import { allowDaily, allowIp, CAPACITY_MESSAGE, RATE_MESSAGE } from "./guard";
+import { Fx } from "./fx";
+import { cachedFetchText, Rates } from "./rates";
 import { Repo } from "./repo";
 import { SecClient } from "./sec/edgar";
 import { buildServer } from "./tools";
@@ -33,9 +35,13 @@ export function handlerFor(env: Env, refuse = ""): Handler {
   if (!byMsg) handlers.set(env, (byMsg = new Map()));
   let h = byMsg.get(refuse);
   if (!h) {
-    const sec = new SecClient({ userAgent: env.SEC_USER_AGENT, cache: cacheOrNull() });
+    const cache = cacheOrNull();
+    const sec = new SecClient({ userAgent: env.SEC_USER_AGENT, cache });
     const repo = new Repo(sec, env.ASSETS ?? null);
-    h = createMcpHandler(() => buildServer(repo, refuse || undefined), { legacy: "stateless" });
+    const text = cachedFetchText((i, init) => fetch(i, init), cache);
+    const rates = new Rates(text);
+    const fx = new Fx(text);
+    h = createMcpHandler(() => buildServer({ repo, rates, fx }, refuse || undefined), { legacy: "stateless" });
     byMsg.set(refuse, h);
   }
   return h;
@@ -55,6 +61,7 @@ export default {
         disclaimer: DISCLAIMER,
       });
     }
+    // Everything else (including /v1/damodaran.json, routed here by run_worker_first) is not public.
     if (url.pathname !== "/mcp") return new Response("Not found", { status: 404 });
 
     const extra = (env.ALLOWED_ORIGINS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
